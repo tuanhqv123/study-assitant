@@ -27,7 +27,7 @@ class PTITAuthService:
                 data = response.json()
                 self.access_token = data.get('access_token')
                 # Set token expiry (typically 24 hours from now)
-                self.token_expiry = datetime.now() + timedelta(hours=24)
+                self.token_expiry = datetime.now() + timedelta(hours=2)
                 return True, None
             else:
                 error_msg = response.json().get('error_description', 'Authentication failed')
@@ -35,6 +35,48 @@ class PTITAuthService:
 
         except Exception as e:
             logger.log_with_timestamp("AUTH ERROR", str(e))
+            return False, str(e)
+
+    def login_raw(self, username, password):
+        """
+        Authenticate with PTIT and return the raw login response
+        
+        Args:
+            username (str): PTIT username
+            password (str): PTIT password
+            
+        Returns:
+            tuple: (success, result)
+                - If success is True, result contains the complete login response
+                - If success is False, result contains an error message
+        """
+        try:
+            url = "https://uis.ptithcm.edu.vn/api/auth/login"
+            
+            payload = {
+                'username': username,
+                'password': password,
+                'grant_type': 'password'
+            }
+            
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'StudyAssistant/1.0'
+            }
+            
+            response = requests.post(url, data=payload, headers=headers)
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                if response_data.get('result') == 'true':
+                    # Return the complete response data
+                    return True, response_data
+                else:
+                    return False, "Invalid credentials"
+            else:
+                return False, f"API Error: {response.status_code}"
+                
+        except Exception as e:
             return False, str(e)
 
     def get_current_semester(self):

@@ -1,16 +1,21 @@
 from unidecode import unidecode
 from ..services.ai_service import AiService
+from datetime import datetime, timedelta
+import calendar
 
 class QueryClassifier:
     def __init__(self):
         self.ai_service = AiService()
+        self.today = datetime.now().date()
         self.categories = [
             'schedule',    # Lịch học, thời khóa biểu
             'grades',      # Điểm số, kết quả học tập
             'courses',     # Môn học, tài liệu, giảng viên
             'career',      # Nghề nghiệp, việc làm
             'general',     # Tư vấn học tập chung
-            'other'        # Không liên quan đến học tập
+            'other',       # Không liên quan đến học tập
+            'date_query',  # Truy vấn về ngày cụ thể
+            'uml'          # UML/PlantUML queries
         ]
 
     def normalize_vietnamese(self, text):
@@ -22,7 +27,35 @@ class QueryClassifier:
         Classify the input query using both keyword-based and AI-based methods
         Returns: (category, confidence, method)
         """
-        # First try keyword-based classification (faster)
+        if not text or text.strip() == '':
+            return {
+                'category': 'general',
+                'confidence': 0.5,
+                'method': 'empty-input'
+            }
+        
+        # Detect UML/PlantUML queries first
+        text_lower = text.lower()
+        text_normalized = self.normalize_vietnamese(text_lower)
+        if 'uml' in text_lower or 'plantuml' in text_lower:
+            return {
+                'category': 'uml',
+                'confidence': 0.95,
+                'method': 'keyword'
+            }
+        
+        # Check if it's a date query first
+        is_date, date_info = self.is_date_query(text)
+        if is_date:
+            return {
+                'category': 'date_query',
+                'confidence': 0.95,
+                'method': 'keyword',
+                'keyword': date_info.get('keyword', ''),
+                'date_info': date_info
+            }
+            
+        # Then try schedule-related classification (faster)
         is_schedule, keyword = self.is_schedule_related(text)
         if is_schedule:
             return {
@@ -64,18 +97,162 @@ class QueryClassifier:
         for keyword in schedule_keywords['vn']:
             if keyword in text_lower:
                 return True, keyword
-
+                
         # Check Vietnamese without accents
         for keyword in schedule_keywords['vn_no_accent']:
             if keyword in text_normalized:
                 return True, keyword
-
+        
         # Check English
         for keyword in schedule_keywords['en']:
-            if keyword in text_normalized:
+            if keyword in text_normalized or keyword in text_lower:
                 return True, keyword
-
+        
+        # Not schedule-related
         return False, None
+        
+    def is_date_query(self, text):
+        """
+        Check if the text is a query about a specific date or day of the week
+        Returns: (bool, date_info)
+        """
+        # Log that we're checking for a date query
+        print(f"Checking if '{text}' is a date query")
+        
+        # Convert to lowercase and normalize
+        text_normalized = self.normalize_vietnamese(text.lower())
+        text_lower = text.lower()
+        
+        # Get current date information
+        today = self.today
+        current_weekday = today.weekday()  # 0 = Monday, 6 = Sunday
+        
+        # Vietnamese weekday names (with and without accents)
+        weekdays_vn = {
+            'thứ hai': 0, 'thu hai': 0, 'thứ 2': 0, 'thu 2': 0,
+            'thứ ba': 1, 'thu ba': 1, 'thứ 3': 1, 'thu 3': 1,
+            'thứ tư': 2, 'thu tu': 2, 'thứ 4': 2, 'thu 4': 2,
+            'thứ năm': 3, 'thu nam': 3, 'thứ 5': 3, 'thu 5': 3,
+            'thứ sáu': 4, 'thu sau': 4, 'thứ 6': 4, 'thu 6': 4,
+            'thứ bảy': 5, 'thu bay': 5, 'thứ 7': 5, 'thu 7': 5,
+            'chủ nhật': 6, 'chu nhat': 6, 'cn': 6
+        }
+        
+        # English weekday names
+        weekdays_en = {
+            'monday': 0, 'mon': 0,
+            'tuesday': 1, 'tue': 1,
+            'wednesday': 2, 'wed': 2,
+            'thursday': 3, 'thu': 3,
+            'friday': 4, 'fri': 4,
+            'saturday': 5, 'sat': 5,
+            'sunday': 6, 'sun': 6
+        }
+        
+        # Time references in Vietnamese and English
+        time_refs = {
+            'hôm nay': 0, 'hom nay': 0, 'today': 0,
+            'ngày mai': 1, 'ngay mai': 1, 'tomorrow': 1,
+            'hôm qua': -1, 'hom qua': -1, 'yesterday': -1,
+            'ngày kia': 2, 'ngay kia': 2, 'day after tomorrow': 2,
+            'hôm kia': -2, 'hom kia': -2, 'day before yesterday': -2
+        }
+        
+        # Week references in Vietnamese and English
+        week_refs = {
+            'tuần này': 'this_week', 'tuan nay': 'this_week', 'this week': 'this_week',
+            'tuần sau': 'next_week', 'tuan sau': 'next_week', 'next week': 'next_week',
+            'tuần trước': 'last_week', 'tuan truoc': 'last_week', 'last week': 'last_week',
+            'tuần tới': 'next_week', 'tuan toi': 'next_week', 'coming week': 'next_week'
+        }
+        
+        # Check for direct date references
+        for ref, offset in time_refs.items():
+            if ref in text_lower or ref in text_normalized:
+                target_date = today + timedelta(days=offset)
+                return True, {
+                    'type': 'specific_date',
+                    'date': target_date,
+                    'keyword': ref,
+                    'weekday': calendar.day_name[target_date.weekday()],
+                    'weekday_vn': self.get_vietnamese_weekday(target_date.weekday()),
+                    'date_str': target_date.strftime('%d/%m/%Y')
+                }
+        
+        # Check for weekday references
+        for day_name, day_index in {**weekdays_vn, **weekdays_en}.items():
+            if day_name in text_lower or day_name in text_normalized:
+                # Default to the current week
+                days_ahead = day_index - current_weekday
+                if days_ahead <= 0:  # If the day has passed this week, look at next week
+                    days_ahead += 7
+                
+                # Check if it's for next week
+                for next_week_ref in ['tuần sau', 'tuan sau', 'next week', 'tuần tới', 'tuan toi']:
+                    if next_week_ref in text_lower or next_week_ref in text_normalized:
+                        days_ahead += 7
+                        break
+                
+                # Check if it's for last week
+                for last_week_ref in ['tuần trước', 'tuan truoc', 'last week']:
+                    if last_week_ref in text_lower or last_week_ref in text_normalized:
+                        days_ahead -= 14  # Go back 2 weeks (7 days to get to this week's day, then 7 more for last week)
+                        break
+                
+                target_date = today + timedelta(days=days_ahead)
+                return True, {
+                    'type': 'weekday',
+                    'date': target_date,
+                    'keyword': day_name,
+                    'weekday': calendar.day_name[target_date.weekday()],
+                    'weekday_vn': self.get_vietnamese_weekday(target_date.weekday()),
+                    'date_str': target_date.strftime('%d/%m/%Y')
+                }
+        
+        # Check for week references
+        for week_ref, week_type in week_refs.items():
+            if week_ref in text_lower or week_ref in text_normalized:
+                # Calculate the start and end of the week
+                if week_type == 'this_week':
+                    # Start of current week (Monday)
+                    start_of_week = today - timedelta(days=current_weekday)
+                    end_of_week = start_of_week + timedelta(days=6)  # Sunday
+                elif week_type == 'next_week':
+                    # Start of next week
+                    start_of_week = today - timedelta(days=current_weekday) + timedelta(days=7)
+                    end_of_week = start_of_week + timedelta(days=6)
+                elif week_type == 'last_week':
+                    # Start of last week
+                    start_of_week = today - timedelta(days=current_weekday) - timedelta(days=7)
+                    end_of_week = start_of_week + timedelta(days=6)
+                
+                return True, {
+                    'type': 'week',
+                    'week_type': week_type,
+                    'keyword': week_ref,
+                    'start_date': start_of_week,
+                    'end_date': end_of_week,
+                    'start_date_str': start_of_week.strftime('%d/%m/%Y'),
+                    'end_date_str': end_of_week.strftime('%d/%m/%Y')
+                }
+        
+        return False, None
+    
+    def get_vietnamese_weekday(self, weekday_index):
+        """
+        Convert weekday index to Vietnamese weekday name
+        0 = Monday, 6 = Sunday
+        """
+        weekday_names = {
+            0: 'Thứ Hai',
+            1: 'Thứ Ba',
+            2: 'Thứ Tư',
+            3: 'Thứ Năm',
+            4: 'Thứ Sáu',
+            5: 'Thứ Bảy',
+            6: 'Chủ Nhật'
+        }
+        return weekday_names.get(weekday_index, '')
 
     def classify_with_ai(self, question):
         """
@@ -154,6 +331,7 @@ class QueryClassifier:
         
         except Exception as e:
             # Fallback to a basic categorization
+            print(f"Error in AI classification: {str(e)}")
             return {'category': 'general', 'confidence': 0.3, 'method': f'error: {str(e)}'}
 
     def is_academic_topic(self, question):

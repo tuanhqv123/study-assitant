@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pdb
+*.egg-info/
+venv*/
+venv310/
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# macOS
+.DS_Store
+
+# Node.js / Frontend
+node_modules/
+dist/
+build/
+.cache/
+*.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System
+Thumbs.db
+
+# Others
+*.bak
+*.tmp
+
+# Ignore test coverage
+coverage/
+
+# Ignore structured logs
+*.jsonl
+
+# Ignore public build artifacts
+frontend/public/

@@ -2,6 +2,7 @@ from flask import Flask
 from flask_cors import CORS
 from .routes.chat import chat_bp
 from .routes.auth import auth_bp
+from .routes.file_routes import file_bp
 from .utils.logger import Logger
 
 logger = Logger()
@@ -14,5 +15,6 @@ def create_app():
     # Register blueprints
     app.register_blueprint(chat_bp)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(file_bp, url_prefix='/file')
 
     return app

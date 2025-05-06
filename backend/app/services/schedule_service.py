@@ -8,10 +8,17 @@ from ..utils.logger import Logger
 logger = Logger()
 
 class ScheduleService:
-    def __init__(self, auth_service=None):
+    def __init__(self, auth_service=None, ai_service=None):
         self.today = datetime.now().date()
         self.base_url = "https://uis.ptithcm.edu.vn/api/sch"
         self.auth_service = auth_service
+        self.ai_service = ai_service
+        self.time_analyzer = None
+        
+        # Initialize time analyzer if AI service is provided
+        if ai_service:
+            from .time_analyzer import TimeAnalyzer
+            self.time_analyzer = TimeAnalyzer(ai_service)
 
     def set_auth_service(self, auth_service):
         """Set the authentication service for token management
@@ -20,6 +27,19 @@ class ScheduleService:
             auth_service (PTITAuthService): The authentication service instance
         """
         self.auth_service = auth_service
+        
+    def set_ai_service(self, ai_service):
+        """Set the AI service for time analysis
+        
+        Args:
+            ai_service (AiService): The AI service instance
+        """
+        self.ai_service = ai_service
+        
+        # Initialize or update time analyzer
+        if self.ai_service:
+            from .time_analyzer import TimeAnalyzer
+            self.time_analyzer = TimeAnalyzer(self.ai_service)
         
     def check_auth(self):
         """Check if the service is properly authenticated
@@ -33,7 +53,24 @@ class ScheduleService:
         """
         Extract date references from a question like "today", "tomorrow", "next Monday", etc.
         Returns a tuple of (referenced_date, date_type, original_text)
+        
+        This method now uses AI-based time analysis if available, falling back to regex patterns
+        if AI service is not configured.
         """
+        # Use AI-based time analyzer if available
+        if self.time_analyzer and self.ai_service:
+            logger.log_with_timestamp("SCHEDULE API", "Using AI-based time analysis")
+            time_analysis_result = self.time_analyzer.analyze_time_references(question)
+            # Check if the time analyzer returned a valid result
+            if time_analysis_result is not None:
+                return time_analysis_result
+            else:
+                # If time analyzer returns None, log it and fall back to regex
+                logger.log_with_timestamp("SCHEDULE API", "AI-based time analysis returned None, falling back to regex")
+        
+        # Fallback to regex-based analysis if AI service is not available
+        logger.log_with_timestamp("SCHEDULE API", "Falling back to regex-based time analysis")
+        
         # Convert to lowercase and normalize
         question_normalized = self.normalize_vietnamese(question.lower())
         question_lower = question.lower()
@@ -64,6 +101,43 @@ class ScheduleService:
             'sunday': ['chủ nhật', 'chu nhat', 'sunday', 'cn']
         }
         
+        # Check for specific week containing a date (e.g., "tuần có ngày 3")
+        week_with_date_patterns = [
+            r'tuần có ngày (\d{1,2})',  # tuần có ngày DD
+            r'tuan co ngay (\d{1,2})',  # tuan co ngay DD
+            r'tuần.*ngày (\d{1,2})',    # tuần ... ngày DD
+            r'tuan.*ngay (\d{1,2})'     # tuan ... ngay DD
+        ]
+        
+        for pattern in week_with_date_patterns:
+            matches = re.search(pattern, question_normalized)
+            if matches:
+                day = int(matches.group(1))
+                # Assume current month and year if not specified
+                target_date = None
+                try:
+                    target_date = datetime(self.today.year, self.today.month, day).date()
+                    # If the day has passed in current month, check if user might be referring to next month
+                    if target_date < self.today and day < 15:  # Assuming if day is small, user might mean next month
+                        next_month = self.today.month + 1 if self.today.month < 12 else 1
+                        next_year = self.today.year if self.today.month < 12 else self.today.year + 1
+                        target_date = datetime(next_year, next_month, day).date()
+                except ValueError:
+                    # Invalid date, try next month if current month doesn't have this day
+                    try:
+                        next_month = self.today.month + 1 if self.today.month < 12 else 1
+                        next_year = self.today.year if self.today.month < 12 else self.today.year + 1
+                        target_date = datetime(next_year, next_month, day).date()
+                    except ValueError:
+                        # Still invalid, skip this pattern
+                        continue
+                
+                if target_date:
+                    # Calculate the week containing this date
+                    start_of_week = target_date - timedelta(days=target_date.weekday())  # Monday of the week
+                    end_of_week = start_of_week + timedelta(days=6)  # Sunday of the week
+                    return ((start_of_week, end_of_week), 'specific_week', matches.group(0))
+        
         # Check for date references
         for date_type, patterns in date_patterns.items():
             for pattern in patterns:
@@ -83,8 +157,10 @@ class ScheduleService:
                         end_of_week = start_of_week + timedelta(days=6)
                         return ((start_of_week, end_of_week), 'this_week', pattern)
                     elif date_type == 'next_week':
-                        # Return the next week
-                        start_of_week = self.today + timedelta(days=(7-self.today.weekday()))
+                        # Return the next week (starting from Monday of next week)
+                        # Calculate days until next Monday
+                        days_until_next_monday = 7 - self.today.weekday() if self.today.weekday() > 0 else 7
+                        start_of_week = self.today + timedelta(days=days_until_next_monday)
                         end_of_week = start_of_week + timedelta(days=6)
                         return ((start_of_week, end_of_week), 'next_week', pattern)
                     elif date_type == 'this_month':
@@ -126,18 +202,22 @@ class ScheduleService:
             r'ngay (\d{1,2})[/-](\d{1,2})'   # ngay DD/MM
         ]
         
+        # First check if there's a direct date pattern in the question
         for pattern in date_patterns:
             matches = re.search(pattern, question_normalized)
             if matches:
+                logger.log_with_timestamp("SCHEDULE API", f"Found date pattern: {matches.group(0)}")
                 day = int(matches.group(1))
                 month = int(matches.group(2))
                 year = int(matches.group(3)) if len(matches.groups()) > 2 and matches.group(3) else self.today.year
                 
                 try:
                     specific_date = datetime(year, month, day).date()
+                    logger.log_with_timestamp("SCHEDULE API", f"Parsed specific date: {specific_date.strftime('%d/%m/%Y')}")
                     return (specific_date, 'specific_date', matches.group(0))
                 except ValueError:
                     # Invalid date, like February 30
+                    logger.log_with_timestamp("SCHEDULE API", f"Invalid date: {day}/{month}/{year}")
                     continue
         
         # No date reference found, default to today
@@ -388,9 +468,16 @@ class ScheduleService:
             print(f"Error getting schedule from PTIT API: {e}")
             return None
     
-    def format_schedule_for_display(self, schedule_data):
+    def format_schedule_for_display(self, schedule_data, include_header=True):
         """
         Format schedule data for display in the chat.
+        
+        Args:
+            schedule_data (dict): Schedule data to format
+            include_header (bool): Whether to include the header with date information
+            
+        Returns:
+            str: Formatted schedule text
         """
         vietnamese_days = {
             "Monday": "Thứ Hai",
@@ -408,9 +495,14 @@ class ScheduleService:
         thu_so = schedule_data.get('thu_kieu_so', 0)
         
         if not schedule_data["classes"]:
-            return f"Không có lớp học nào vào {day_name} (Thứ {thu_so}), ngày {formatted_date} ({schedule_data['semester']})."
+            if include_header:
+                return f"Không có lớp học nào vào {day_name} (Thứ {thu_so}), ngày {formatted_date} ({schedule_data['semester']})."
+            else:
+                return ""
         
-        result = f"Lịch học ngày {formatted_date} ({day_name} - Thứ {thu_so}) - {schedule_data['semester']}:\n\n"
+        result = ""
+        if include_header:
+            result = f"Lịch học ngày {formatted_date} ({day_name} - Thứ {thu_so}) - {schedule_data['semester']}:\n\n"
         
         for i, class_info in enumerate(schedule_data["classes"], 1):
             # Add Vietnamese subject name
@@ -459,17 +551,34 @@ class ScheduleService:
         if isinstance(date_info, tuple):  # Date range (this_week, next_week, this_month)
             start_date, end_date = date_info
             
-            # Get schedule for the first day from PTIT API
-            schedule_data = await self.get_schedule(start_date, hoc_ky)
-            if schedule_data:
-                formatted_message = f"Đây là lịch học cho {original_text} ({date_type}):\n\n"
-                formatted_message += self.format_schedule_for_display(schedule_data)
-                
-                # Add note that this is just for the first day
-                formatted_message += "\nĐây chỉ là lịch học cho ngày đầu tiên trong khoảng thời gian bạn yêu cầu."
-                formatted_message += "\nĐể xem lịch học đầy đủ, vui lòng truy cập hệ thống quản lý học tập của trường."
+            # Get schedule for all days in the range
+            formatted_message = f"Đây là lịch học cho {original_text} ({date_type}):\n\n"
+            
+            # Calculate the number of days in the range
+            days_in_range = (end_date - start_date).days + 1
+            
+            # Limit to 7 days for week queries to avoid excessive API calls
+            if date_type in ['this_week', 'next_week']:
+                days_to_fetch = min(days_in_range, 7)
             else:
-                formatted_message = "Xin lỗi, không thể lấy thông tin lịch học từ hệ thống. Vui lòng thử lại sau."
+                # For month queries, limit to 14 days to avoid excessive API calls
+                days_to_fetch = min(days_in_range, 14)
+            
+            # Get schedule for each day in the range
+            has_classes = False
+            for i in range(days_to_fetch):
+                current_date = start_date + timedelta(days=i)
+                daily_schedule = await self.get_schedule(current_date, hoc_ky)
+                
+                if daily_schedule and daily_schedule["classes"]:
+                    has_classes = True
+                    formatted_message += f"--- {current_date.strftime('%d/%m/%Y')} ---\n"
+                    formatted_message += self.format_schedule_for_display(daily_schedule)
+                    formatted_message += "\n"
+            
+            if not has_classes:
+                formatted_message += f"Không có lớp học nào trong khoảng thời gian từ {start_date.strftime('%d/%m/%Y')} đến {start_date + timedelta(days=days_to_fetch-1)}.\n"
+                formatted_message += "Vui lòng kiểm tra lại lịch học trên hệ thống quản lý học tập của trường."
             
             # Format the date range information for the response
             date_range_info = f"{start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}"

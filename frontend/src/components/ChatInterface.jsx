@@ -4,7 +4,9 @@ import { supabase } from "../lib/supabase";
 import MessageItem from "./MessageItem";
 import ChatInput from "./ChatInput";
 import Settings from "./Settings";
-import { X, Settings as SettingsIcon } from "lucide-react"; // Import Settings icon
+import { X, Settings as SettingsIcon } from "lucide-react";
+// Import theme toggle
+import { ThemeToggle } from "./ui/theme-toggle";
 
 const ChatInterface = () => {
   const navigate = useNavigate();
@@ -14,6 +16,7 @@ const ChatInterface = () => {
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeFileContext, setActiveFileContext] = useState(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -116,7 +119,36 @@ const ChatInterface = () => {
     scrollToBottom();
   }, [messages]);
 
-  // Update sendMessage to save messages to database
+  // Handle file upload success from ChatInput
+  const handleFileUpload = (fileId, fileName) => {
+    setActiveFileContext({ id: fileId, name: fileName });
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "system",
+        content: `Đã tải file "${fileName}" lên. Bạn có thể hỏi về nội dung file này.`,
+      },
+    ]);
+  };
+
+  // Clear file context when user clicks remove
+  const clearFileContext = async () => {
+    if (!activeFileContext) return;
+    try {
+      await fetch(`/api/files/${activeFileContext.id}?user_id=${user.id}`, {
+        method: "DELETE",
+      });
+      setMessages((prev) => [
+        ...prev,
+        { role: "system", content: "Đã xóa ngữ cảnh file." },
+      ]);
+    } catch (e) {
+      console.error("Error deleting file context:", e);
+    }
+    setActiveFileContext(null);
+  };
+
+  // Update sendMessage to include file_id
   const handleSendMessage = async (message) => {
     if (!message.trim() || isLoading) return;
     setIsLoading(true);
@@ -133,7 +165,9 @@ const ChatInterface = () => {
       setMessages((prev) => [...prev, newMessage]);
 
       // Save message to Supabase
-      const { error: insertError } = await supabase.from("messages").insert([newMessage]);
+      const { error: insertError } = await supabase
+        .from("messages")
+        .insert([newMessage]);
 
       if (insertError) {
         console.error("Error saving message to database:", insertError);
@@ -149,7 +183,8 @@ const ChatInterface = () => {
         .eq("user_id", user?.id)
         .single();
 
-      if (credentialsError) {
+      if (credentialsError && credentialsError.code !== "PGRST116") {
+        // PGRST116 is "No rows found", which is expected for new users
         console.error(
           "Error loading university credentials:",
           credentialsError
@@ -162,6 +197,7 @@ const ChatInterface = () => {
         conversation_history: messages,
         user_id: user?.id || null,
         university_credentials: credentials || null,
+        file_id: activeFileContext?.id,
       };
 
       console.log("Sending chat request with user ID:", user?.id);
@@ -171,23 +207,27 @@ const ChatInterface = () => {
         console.log("No university credentials found for user");
       }
 
-      const response = await fetch("http://localhost:5000/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      let data;
       try {
-        data = await response.json();
-      } catch (jsonError) {
-        console.error("JSON parsing error:", jsonError);
-        throw new Error("Invalid response format from server");
-      }
+        const response = await fetch("http://localhost:5000/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
 
-      if (response.ok) {
+        if (!response.ok) {
+          throw new Error(`Server responded with status: ${response.status}`);
+        }
+
+        let data;
+        try {
+          data = await response.json();
+        } catch (jsonError) {
+          console.error("JSON parsing error:", jsonError);
+          throw new Error("Invalid response format from server");
+        }
+
         // Add assistant's response to messages
         const assistantMessage = {
           role: "assistant",
@@ -204,21 +244,55 @@ const ChatInterface = () => {
           .insert([assistantMessage]);
 
         if (assistantInsertError) {
-          console.error("Error saving assistant message to database:", assistantInsertError);
+          console.error(
+            "Error saving assistant message to database:",
+            assistantInsertError
+          );
         }
-      } else {
-        throw new Error(data.error || "Failed to get response");
+      } catch (requestError) {
+        console.error("Error communicating with backend:", requestError);
+
+        // Show friendly error message in chat
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content:
+              "Xin lỗi, tôi không thể xử lý yêu cầu của bạn lúc này. Vui lòng thử lại sau hoặc liên hệ hỗ trợ kỹ thuật.",
+            chat_id: activeChat,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+
+        // Save error message to database
+        await supabase.from("messages").insert([
+          {
+            role: "assistant",
+            content:
+              "Xin lỗi, tôi không thể xử lý yêu cầu của bạn lúc này. Vui lòng thử lại sau hoặc liên hệ hỗ trợ kỹ thuật.",
+            chat_id: activeChat,
+            created_at: new Date().toISOString(),
+          },
+        ]);
       }
     } catch (error) {
       console.error("Error sending message:", error);
       // Show error in chat
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại sau.",
-        },
-      ]);
+      const errorMessage = {
+        role: "assistant",
+        content: "Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại sau.",
+        chat_id: activeChat,
+        created_at: new Date().toISOString(),
+      };
+
+      setMessages((prev) => [...prev, errorMessage]);
+
+      // Try to save the error message to the database
+      try {
+        await supabase.from("messages").insert([errorMessage]);
+      } catch (dbError) {
+        console.error("Failed to save error message to database:", dbError);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -254,19 +328,19 @@ const ChatInterface = () => {
   };
 
   return (
-    <div className="flex h-screen bg-[#1f1f1f] overflow-hidden">
+    <div className="flex h-screen bg-background overflow-hidden">
       {/* Sidebar - fixed height, no scrolling */}
-      <div className="w-64 bg-[#1a1a1a] border-r border-[#d1cfc0]/10 flex flex-col h-screen overflow-hidden">
+      <div className="w-64 bg-card border-r border-border flex flex-col h-screen overflow-hidden">
         <div className="flex-1 flex flex-col">
           {/* Logo */}
           <div className="flex justify-center items-center mt-6 mb-2">
-            <h1 className="font-['Montserrat',sans-serif] font-semibold text-[#d1cfc0] text-2xl tracking-wide">
+            <h1 className="font-['Montserrat',sans-serif] font-semibold text-foreground text-2xl tracking-wide">
               <em>&#8220;forPTITer&#8221;</em>
             </h1>
           </div>
           <button
             onClick={handleNewChat}
-            className="m-4 p-2 bg-[#2a2a2a] rounded-lg text-[#d1cfc0] hover:bg-[#333333] border border-[#d1cfc0]/10"
+            className="m-4 p-2 bg-secondary rounded-lg text-foreground hover:bg-accent border border-border"
           >
             + New Chat
           </button>
@@ -274,15 +348,15 @@ const ChatInterface = () => {
             {chatSessions.map((session) => (
               <div
                 key={session.id}
-                className={`p-3 hover:bg-[#2a2a2a] cursor-pointer relative group ${
-                  activeChat === session.id ? "bg-[#333333]" : ""
+                className={`p-3 hover:bg-secondary cursor-pointer relative group ${
+                  activeChat === session.id ? "bg-accent" : ""
                 }`}
                 onClick={() => {
                   setActiveChat(session.id);
                   loadMessages(session.id);
                 }}
               >
-                <p className="text-sm text-[#d1cfc0]/80 truncate pr-7">
+                <p className="text-sm text-muted-foreground truncate pr-7">
                   Chat {new Date(session.created_at).toLocaleDateString()}{" "}
                   {new Date(session.created_at).toLocaleTimeString([], {
                     hour: "2-digit",
@@ -293,7 +367,7 @@ const ChatInterface = () => {
                 <button
                   onClick={(e) => handleDeleteChat(session.id, e)}
                   className="absolute top-1/2 right-2 -translate-y-1/2 
-                             text-[#d1cfc0]/60 hover:text-[#d1cfc0]/90
+                             text-muted-foreground hover:text-foreground
                              opacity-0 group-hover:opacity-100
                              transition-opacity"
                   aria-label="Delete chat"
@@ -305,16 +379,21 @@ const ChatInterface = () => {
           </div>
         </div>
         {user && (
-          <div className="p-4 border-t border-[#d1cfc0]/10 mt-auto">
+          <div className="p-4 border-t border-border mt-auto">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm text-[#d1cfc0]/80 truncate">{user.email}</p>
-              <button
-                onClick={() => setSettingsOpen(true)}
-                className="p-1.5 rounded-full bg-[#2a2a2a] hover:bg-[#333333] transition-colors"
-                aria-label="Settings"
-              >
-                <SettingsIcon className="h-4 w-4 text-[#d1cfc0]/70" />
-              </button>
+              <p className="text-sm text-muted-foreground truncate">
+                {user.email}
+              </p>
+              <div className="flex items-center space-x-2">
+                <ThemeToggle />
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  className="p-1.5 rounded-full bg-secondary hover:bg-accent transition-colors"
+                  aria-label="Settings"
+                >
+                  <SettingsIcon className="h-4 w-4 text-muted-foreground" />
+                </button>
+              </div>
             </div>
             <button
               onClick={handleLogout}
@@ -344,19 +423,19 @@ const ChatInterface = () => {
               <div className="flex items-center gap-2 p-4">
                 <div className="flex space-x-1">
                   <div
-                    className="h-2 w-2 animate-bounce rounded-full bg-[#d1cfc0]/30"
+                    className="h-2 w-2 animate-bounce rounded-full bg-muted"
                     style={{ animationDelay: "0ms" }}
                   />
                   <div
-                    className="h-2 w-2 animate-bounce rounded-full bg-[#d1cfc0]/30"
+                    className="h-2 w-2 animate-bounce rounded-full bg-muted"
                     style={{ animationDelay: "150ms" }}
                   />
                   <div
-                    className="h-2 w-2 animate-bounce rounded-full bg-[#d1cfc0]/30"
+                    className="h-2 w-2 animate-bounce rounded-full bg-muted"
                     style={{ animationDelay: "300ms" }}
                   />
                 </div>
-                <span className="text-sm text-[#d1cfc0]/70">
+                <span className="text-sm text-muted-foreground">
                   Study Assistant AI đang trả lời...
                 </span>
               </div>
@@ -364,11 +443,15 @@ const ChatInterface = () => {
             <div ref={messagesEndRef} />
           </div>
         </div>
-        <div className="absolute bottom-0 left-64 right-0 bg-[#1f1f1f]">
+        <div className="absolute bottom-0 left-64 right-0 bg-background">
           <div className="mx-auto max-w-3xl">
             <ChatInput
               onSendMessage={handleSendMessage}
               isLoading={isLoading}
+              onFileUpload={handleFileUpload}
+              userId={user?.id}
+              activeFileContext={activeFileContext}
+              clearFileContext={clearFileContext}
             />
           </div>
         </div>
