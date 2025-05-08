@@ -8,6 +8,7 @@ from ..lib.supabase import supabase
 import time
 from datetime import datetime, timedelta
 import json
+from ..config.agents import get_agent, get_all_agents
 
 chat_bp = Blueprint('chat', __name__)
 ai_service = AiService()
@@ -20,6 +21,17 @@ ptit_auth_service = PTITAuthService()
 schedule_service.set_auth_service(ptit_auth_service)
 schedule_service.set_ai_service(ai_service)
 
+@chat_bp.route('/agents', methods=['GET'])
+def get_agents():
+    """
+    Get the list of available agents.
+    
+    Returns:
+        JSON response with list of available agents.
+    """
+    agents = get_all_agents()
+    return jsonify({'agents': agents})
+
 @chat_bp.route('/chat', methods=['POST'])
 async def chat():
     try:
@@ -27,16 +39,30 @@ async def chat():
         file_id = data.get('file_id')  # handle file context
         message = data.get('message')
         conversation_history = data.get('conversation_history', [])
+        agent_id = data.get('agent_id')  # Get agent_id from request
+        web_search_enabled = data.get('web_search_enabled', False)  # Get web search flag
+        
+        # Log which agent is being used
+        if agent_id:
+            agent = get_agent(agent_id)
+            logger.log_with_timestamp(
+                "AGENT SELECTION",
+                f"Using agent: {agent['display_name']}",
+                f"Model: {agent['model']}"
+            )
+        
+        # Handle file context
         if file_id:
             # use file context handler
             response, updated_history = await ai_service.chat_with_file_context(
-                message, file_id, conversation_history
+                message, file_id, conversation_history, agent_id
             )
             return jsonify({
                 'response': response,
                 'conversation_history': updated_history,
                 'file_context_active': True,
-                'file_id': file_id
+                'file_id': file_id,
+                'agent_id': agent_id
             })
         
         if not message:
@@ -45,6 +71,55 @@ async def chat():
         # Log user message
         logger.log_with_timestamp("USER INPUT", message, f"Message length: {len(message)} chars")
         
+        # Check if web search is enabled
+        if web_search_enabled:
+            logger.log_with_timestamp("WEB_SEARCH_ENABLED", "Using web search for query", "")
+            
+            # Get chat_id from request
+            chat_id = data.get('chat_id')
+            
+            # Log chat session info with more details
+            if chat_id:
+                logger.log_with_timestamp("CHAT_SESSION", f"Using chat session: {chat_id}")
+            else:
+                logger.log_with_timestamp("CHAT_SESSION_WARNING", "No chat_id provided, messages won't be saved to database", f"Request data keys: {list(data.keys())}")
+                # Check all the data received to debug
+                logger.log_with_timestamp("REQUEST_DATA", f"Request data: {json.dumps(data, default=str)[:500]}")
+            
+            # Call AI service with web search
+            logger.log_with_timestamp("WEB_SEARCH_CALL", "Calling AI service with web search")
+            web_response, updated_history = await ai_service.chat_with_web_search(
+                message, conversation_history, agent_id, chat_id
+            )
+            
+            # Log the response format for debugging
+            logger.log_with_timestamp("WEB_SEARCH_RESPONSE", 
+                                   f"Response type: {type(web_response)}, Keys: {list(web_response.keys()) if isinstance(web_response, dict) else 'Not a dict'}")
+                                   
+            # Log sources count and format
+            if isinstance(web_response, dict) and 'sources' in web_response:
+                sources = web_response.get('sources', [])
+                logger.log_with_timestamp("WEB_SEARCH_SOURCES", 
+                                       f"Returning {len(sources)} sources to frontend")
+                if sources and len(sources) > 0:
+                    logger.log_with_timestamp("FIRST_SOURCE_FORMAT", 
+                                           f"First source format: {json.dumps(sources[0]) if sources else 'None'}")
+            
+            # Prepare response for frontend
+            response_data = {
+                'response': web_response['content'] if isinstance(web_response, dict) else web_response,
+                'sources': web_response.get('sources', []) if isinstance(web_response, dict) else [],
+                'web_search_results': True,
+                'conversation_history': updated_history,
+                'query_type': 'web_search',
+                'agent_id': agent_id,
+                'chat_id': chat_id  # Echo back the chat_id for client reference
+            }
+            
+            logger.log_with_timestamp("WEB_SEARCH_COMPLETE", "Web search complete, returning response")
+            return jsonify(response_data)
+        
+        # Regular flow continues if web search is not enabled
         # Use the QueryClassifier to classify the message
         classification_result = query_classifier.classify_query(message)
 
@@ -53,16 +128,17 @@ async def chat():
             uml_prompt = {
                 "role": "system",
                 "content": (
-                    "Bạn là một trợ lý lập trình chuyên nghiệp. Khi trả về sơ đồ UML, "
-                    "hãy luôn bao bọc mã PlantUML trong khối mã dùng dấu ba phẩy ngược và tag `plantuml`, "
-                    "ví dụ: ```plantuml ... ``` để frontend có thể hiển thị hình ảnh. "
-                    "Không kèm giải thích thêm, chỉ xuất khối mã sơ đồ UML."
+                    "You are a professional programming assistant. When returning the UML diagram,"
+                    "Always cover the Plantuml codes in the code block using the three -point sign and tag` plantuml`, "
+                    "For example:` `` Plantuml ... `` `` Frontend can display images. "
+                    "Without further explanation, only export the UML diagram."
                 )
             }
             # Get response from AI - REMOVE await since chat_with_ai is not async
             response, updated_history = ai_service.chat_with_ai(
                 message,
-                [uml_prompt]
+                [uml_prompt],
+                agent_id
             )
             # Ensure PlantUML content is fenced for ReactMarkdown
             content = response.strip()
@@ -74,7 +150,8 @@ async def chat():
             return jsonify({
                 'response': response,
                 'conversation_history': updated_history,
-                'query_type': 'uml'
+                'query_type': 'uml',
+                'agent_id': agent_id
             })
         
         # Log the classification result
@@ -94,7 +171,8 @@ async def chat():
             return jsonify({
                 'response': non_educational_response,
                 'conversation_history': conversation_history,
-                'query_type': 'other'
+                'query_type': 'other',
+                'agent_id': agent_id
             })
         
         # Handle schedule-related queries with date extraction
@@ -269,6 +347,7 @@ async def chat():
                             # Get the actual weekday from the date object directly
                             weekday_name = date_info_value.strftime('%A').lower()
                             vn_weekday = vietnamese_weekday_map.get(weekday_name, weekday_name)
+                            
                             # Double-check the weekday is correct by comparing with the date
                             actual_day = date_info_value.weekday()
                             correct_weekday = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"][actual_day]
@@ -322,7 +401,10 @@ async def chat():
                             # Add credit hours if available
                             if class_info.get('so_tin_chi'):
                                 formatted_schedule += f"    Số tín chỉ: {class_info.get('so_tin_chi')}\n"
-                                
+
+                            # Add class date
+                            formatted_schedule += f"    Ngày học: {class_info.get('ngay_hoc', '')}\n"
+                            
                             formatted_schedule += "\n"
                     else:
                         # It's some other format, just convert to string
@@ -352,7 +434,8 @@ async def chat():
                 try:
                     enhanced_response, _ = ai_service.chat_with_ai(
                         message, 
-                        [schedule_prompt]
+                        [schedule_prompt],
+                        agent_id
                     )
                 except Exception as ai_error:
                     # Log the error
@@ -384,7 +467,8 @@ async def chat():
                     'response': enhanced_response,
                     'schedule_data': schedule_result,
                     'conversation_history': conversation_history,
-                    'query_type': 'schedule'
+                    'query_type': 'schedule',
+                    'agent_id': agent_id
                 })
                 
             except Exception as e:
@@ -394,7 +478,8 @@ async def chat():
                     'error': error_msg,
                     'schedule_data': None,
                     'conversation_history': conversation_history,
-                    'query_type': 'schedule'
+                    'query_type': 'schedule',
+                    'agent_id': agent_id
                 }), 500
         
         # If education-related (but not schedule), proceed with normal processing
@@ -429,8 +514,8 @@ async def chat():
         # Record start time
         start_time = time.time()
         
-        # Get response from AI service
-        response, updated_history = ai_service.chat_with_ai(message, enhanced_history)
+        # Get response from AI service - pass the agent_id
+        response, updated_history = ai_service.chat_with_ai(message, enhanced_history, agent_id)
         
         # Calculate response time
         time_taken = round(time.time() - start_time, 2)
@@ -445,11 +530,62 @@ async def chat():
         return jsonify({
             'response': response, 
             'conversation_history': updated_history,
-            'query_type': classification_result['category']
+            'query_type': classification_result['category'],
+            'agent_id': agent_id
         })
         
     except Exception as e:
         error_message = str(e)
         logger.log_with_timestamp("ERROR", error_message)
         print(f"Error in chat endpoint: {e}")
+        return jsonify({'error': error_message}), 500
+
+@chat_bp.route('/chat/messages', methods=['GET'])
+async def get_chat_messages():
+    """
+    Endpoint to get messages for a specific chat session.
+    This is useful for debugging and verifying that messages are properly saved.
+    
+    Query parameters:
+        chat_id: UUID of the chat session
+        
+    Returns:
+        JSON response with messages from the specified chat session
+    """
+    try:
+        chat_id = request.args.get('chat_id')
+        
+        if not chat_id:
+            return jsonify({'error': 'Missing chat_id parameter'}), 400
+            
+        logger.log_with_timestamp("GET_MESSAGES", f"Fetching messages for chat: {chat_id}")
+        
+        # Query the database for messages
+        result = supabase.table('messages') \
+                        .select('*') \
+                        .eq('chat_id', chat_id) \
+                        .order('created_at') \
+                        .execute()
+                        
+        # Format and return messages
+        messages = []
+        if result and hasattr(result, 'data'):
+            messages = result.data
+            # Log what we found
+            logger.log_with_timestamp("GET_MESSAGES", f"Found {len(messages)} messages")
+            
+            # Check for messages with sources
+            messages_with_sources = [msg for msg in messages if msg.get('sources')]
+            if messages_with_sources:
+                logger.log_with_timestamp("SOURCES_FOUND", f"Found {len(messages_with_sources)} messages with sources")
+            
+        return jsonify({
+            'chat_id': chat_id,
+            'messages': messages,
+            'count': len(messages)
+        })
+        
+    except Exception as e:
+        error_message = str(e)
+        logger.log_with_timestamp("ERROR", f"Error fetching messages: {error_message}")
         return jsonify({'error': error_message}), 500

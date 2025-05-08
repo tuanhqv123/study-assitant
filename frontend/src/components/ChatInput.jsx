@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
-import { Send, Paperclip, X } from "lucide-react";
+import { Send, Paperclip, X, Globe } from "lucide-react";
 import { useTheme } from "./ui/theme-provider";
 
 const ChatInput = ({
@@ -14,6 +14,7 @@ const ChatInput = ({
 }) => {
   const [message, setMessage] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const { theme } = useTheme();
@@ -32,7 +33,7 @@ const ChatInput = ({
     e.preventDefault();
     if (!message.trim() || isLoading) return;
 
-    onSendMessage(message);
+    onSendMessage(message, webSearchEnabled);
     setMessage("");
   };
 
@@ -41,6 +42,10 @@ const ChatInput = ({
       e.preventDefault();
       handleSubmit(e);
     }
+  };
+
+  const toggleWebSearch = () => {
+    setWebSearchEnabled(!webSearchEnabled);
   };
 
   const handleFileButtonClick = () => {
@@ -82,7 +87,7 @@ const ChatInput = ({
       }
 
       // Send file to backend
-      const response = await fetch("http://localhost:5000/file/upload", {
+      const response = await fetch("http://localhost:8000/file/upload", {
         method: "POST",
         body: formData,
       });
@@ -114,9 +119,9 @@ const ChatInput = ({
         isLight
           ? "border-gray-200 bg-white"
           : "border-[#d1cfc0]/10 bg-opacity-50"
-      } px-4 py-2`}
+      } py-2`}
     >
-      <div className="mx-auto max-w-3xl">
+      <div className="w-full">
         {activeFileContext && (
           <div
             className={`mb-2 flex items-center justify-between rounded-lg border p-2 ${
@@ -146,7 +151,7 @@ const ChatInput = ({
         )}
         <form
           onSubmit={handleSubmit}
-          className={`relative mx-auto flex max-w-[85%] items-end gap-2 rounded-lg border p-2 ${
+          className={`relative flex w-full items-end gap-2 rounded-lg border p-2 ${
             isLight
               ? "border-gray-300 bg-white shadow-sm"
               : "border-[#d1cfc0]/20 bg-[#1a1a1a]"
@@ -175,7 +180,7 @@ const ChatInput = ({
             type="button"
             onClick={handleFileButtonClick}
             size="icon"
-            className={`h-9 w-9 shrink-0 rounded-full bg-transparent ${
+            className={`h-9 w-9 flex-shrink-0 rounded-full bg-transparent ${
               isLight
                 ? "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                 : "text-[#d1cfc0]/70 hover:text-[#d1cfc0] hover:bg-[#2a2a2a]"
@@ -187,13 +192,35 @@ const ChatInput = ({
             <span className="sr-only">Đính kèm file</span>
           </Button>
 
+          {/* Web search toggle button */}
+          <Button
+            type="button"
+            onClick={toggleWebSearch}
+            size="icon"
+            className={`h-9 w-9 flex-shrink-0 rounded-full ${
+              webSearchEnabled
+                ? isLight
+                  ? "bg-blue-100 text-blue-700 hover:bg-blue-200"
+                  : "bg-[#2a2a2a] text-blue-400 hover:bg-[#333333]"
+                : "bg-transparent " +
+                  (isLight
+                    ? "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                    : "text-[#d1cfc0]/70 hover:text-[#d1cfc0] hover:bg-[#2a2a2a]")
+            }`}
+            disabled={isLoading || isUploading}
+            title={webSearchEnabled ? "Tắt tìm kiếm web" : "Bật tìm kiếm web"}
+          >
+            <Globe className="h-4 w-4" />
+            <span className="sr-only">Tìm kiếm web</span>
+          </Button>
+
           <Textarea
             ref={textareaRef}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Nhắn tin với Study Assistant AI..."
-            className={`min-h-[40px] max-h-[200px] resize-none border-0 bg-transparent p-2 ${
+            className={`flex-1 min-h-[40px] max-h-[200px] resize-none border-0 bg-transparent p-2 ${
               isLight
                 ? "text-gray-800 placeholder-gray-400"
                 : "text-[#d1cfc0] placeholder-[#d1cfc0]/50"
@@ -206,7 +233,7 @@ const ChatInput = ({
             type="submit"
             disabled={!message.trim() || isLoading || isUploading}
             size="icon"
-            className={`h-9 w-9 shrink-0 rounded-full ${
+            className={`h-9 w-9 flex-shrink-0 rounded-full ${
               isLight
                 ? "bg-blue-600 text-white hover:bg-blue-700 border border-blue-700"
                 : "bg-[#2a2a2a] text-[#d1cfc0] hover:bg-[#333333] border border-[#d1cfc0]/10"

@@ -71,9 +71,57 @@ class ScheduleService:
         # Fallback to regex-based analysis if AI service is not available
         logger.log_with_timestamp("SCHEDULE API", "Falling back to regex-based time analysis")
         
-        # Convert to lowercase and normalize
+        # Convert to lowercase và normalize (bỏ dấu)
         question_normalized = self.normalize_vietnamese(question.lower())
         question_lower = question.lower()
+        
+        # Chỉ cần pattern không dấu cho tuần có ngày/tháng/năm
+        week_with_full_date_patterns = [
+            r"tuan.*ngay[\s:]*([0-9]{1,2})[/-]([0-9]{1,2})(?:[/-]([0-9]{4}))?",  # tuan ... ngay DD/MM(/YYYY)
+            r"tuan[\s:]*([0-9]{1,2})[/-]([0-9]{1,2})(?:[/-]([0-9]{4}))?",         # tuan DD/MM(/YYYY)
+            r"tuan[\s:]*([0-9]{1,2}) thang[\s:]*([0-9]{1,2})(?: nam[\s:]*([0-9]{4}))?"  # tuan 21 thang 4 (nam 2025)
+        ]
+        for pattern in week_with_full_date_patterns:
+            matches = re.search(pattern, question_normalized)
+            if matches:
+                day = int(matches.group(1))
+                month = int(matches.group(2)) if matches.lastindex >= 2 and matches.group(2) else self.today.month
+                year = int(matches.group(3)) if matches.lastindex >= 3 and matches.group(3) else self.today.year
+                try:
+                    target_date = datetime(year, month, day).date()
+                except ValueError:
+                    continue
+                start_of_week = target_date - timedelta(days=target_date.weekday())
+                end_of_week = start_of_week + timedelta(days=6)
+                return ((start_of_week, end_of_week), 'specific_week', matches.group(0))
+
+        # Chỉ cần pattern không dấu cho tuần có ngày
+        week_with_date_patterns = [
+            r'tuan co ngay (\d{1,2})',  # tuan co ngay DD
+            r'tuan.*ngay (\d{1,2})'     # tuan ... ngay DD
+        ]
+        for pattern in week_with_date_patterns:
+            matches = re.search(pattern, question_normalized)
+            if matches:
+                day = int(matches.group(1))
+                target_date = None
+                try:
+                    target_date = datetime(self.today.year, self.today.month, day).date()
+                    if target_date < self.today and day < 15:
+                        next_month = self.today.month + 1 if self.today.month < 12 else 1
+                        next_year = self.today.year if self.today.month < 12 else self.today.year + 1
+                        target_date = datetime(next_year, next_month, day).date()
+                except ValueError:
+                    try:
+                        next_month = self.today.month + 1 if self.today.month < 12 else 1
+                        next_year = self.today.year if self.today.month < 12 else self.today.year + 1
+                        target_date = datetime(next_year, next_month, day).date()
+                    except ValueError:
+                        continue
+                if target_date:
+                    start_of_week = target_date - timedelta(days=target_date.weekday())
+                    end_of_week = start_of_week + timedelta(days=6)
+                    return ((start_of_week, end_of_week), 'specific_week', matches.group(0))
         
         # Define date reference patterns in Vietnamese and English
         date_patterns = {
@@ -100,43 +148,6 @@ class ScheduleService:
             'saturday': ['thứ bảy', 'thu 7', 'thu bay', 'saturday', 't7'],
             'sunday': ['chủ nhật', 'chu nhat', 'sunday', 'cn']
         }
-        
-        # Check for specific week containing a date (e.g., "tuần có ngày 3")
-        week_with_date_patterns = [
-            r'tuần có ngày (\d{1,2})',  # tuần có ngày DD
-            r'tuan co ngay (\d{1,2})',  # tuan co ngay DD
-            r'tuần.*ngày (\d{1,2})',    # tuần ... ngày DD
-            r'tuan.*ngay (\d{1,2})'     # tuan ... ngay DD
-        ]
-        
-        for pattern in week_with_date_patterns:
-            matches = re.search(pattern, question_normalized)
-            if matches:
-                day = int(matches.group(1))
-                # Assume current month and year if not specified
-                target_date = None
-                try:
-                    target_date = datetime(self.today.year, self.today.month, day).date()
-                    # If the day has passed in current month, check if user might be referring to next month
-                    if target_date < self.today and day < 15:  # Assuming if day is small, user might mean next month
-                        next_month = self.today.month + 1 if self.today.month < 12 else 1
-                        next_year = self.today.year if self.today.month < 12 else self.today.year + 1
-                        target_date = datetime(next_year, next_month, day).date()
-                except ValueError:
-                    # Invalid date, try next month if current month doesn't have this day
-                    try:
-                        next_month = self.today.month + 1 if self.today.month < 12 else 1
-                        next_year = self.today.year if self.today.month < 12 else self.today.year + 1
-                        target_date = datetime(next_year, next_month, day).date()
-                    except ValueError:
-                        # Still invalid, skip this pattern
-                        continue
-                
-                if target_date:
-                    # Calculate the week containing this date
-                    start_of_week = target_date - timedelta(days=target_date.weekday())  # Monday of the week
-                    end_of_week = start_of_week + timedelta(days=6)  # Sunday of the week
-                    return ((start_of_week, end_of_week), 'specific_week', matches.group(0))
         
         # Check for date references
         for date_type, patterns in date_patterns.items():
@@ -406,12 +417,11 @@ class ScheduleService:
                         "time": f"{start_time} - {end_time}",
                         "room": class_info['ma_phong'],
                         "lecturer": class_info['ten_giang_vien'] or "Chưa cập nhật",
-                        # Include additional fields from the API response
+                        "ngay_hoc": class_date.strftime('%d/%m/%Y'),
                         "thu_kieu_so": class_info.get('thu_kieu_so', 0),
                         "ten_mon_eg": class_info.get('ten_mon_eg', ''),
                         "so_tin_chi": class_info.get('so_tin_chi', ''),
                         "ma_giang_vien": class_info.get('ma_giang_vien', ''),
-                        # Raw data fields for reference
                         "ten_mon": class_info.get('ten_mon', ''),
                         "ma_mon": class_info.get('ma_mon', '')
                     }
@@ -527,6 +537,9 @@ class ScheduleService:
             # Add credit hours if available
             if class_info.get('so_tin_chi'):
                 result += f"    Số tín chỉ: {class_info.get('so_tin_chi')}\n"
+            
+            # Add class date
+            result += f"    Ngày học: {class_info.get('ngay_hoc', '')}\n"
                 
             result += "\n"
         

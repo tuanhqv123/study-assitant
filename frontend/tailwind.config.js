@@ -4,10 +4,7 @@ import typography from "@tailwindcss/typography";
 
 export default {
   darkMode: ["class"],
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     container: {
       center: true,
@@ -69,55 +66,52 @@ export default {
         typing: {
           "0%": {
             width: "0%",
-            visibility: "hidden"
+            visibility: "hidden",
           },
           "100%": {
-            width: "100%"
-          }
+            width: "100%",
+          },
         },
         blink: {
           "50%": {
-            borderColor: "transparent"
+            borderColor: "transparent",
           },
           "100%": {
-            borderColor: "hsl(var(--primary))"
-          }
-        }
+            borderColor: "hsl(var(--primary))",
+          },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
-        typing: "typing 1s steps(20) infinite alternate, blink .7s infinite"
+        typing: "typing 1s steps(20) infinite alternate, blink .7s infinite",
       },
       typography: {
         DEFAULT: {
           css: {
-            maxWidth: 'none',
+            maxWidth: "none",
             code: {
-              backgroundColor: 'rgb(0 0 0 / 0.3)',
-              padding: '0.25rem',
-              borderRadius: '0.25rem',
-              fontWeight: '400',
+              backgroundColor: "rgb(0 0 0 / 0.3)",
+              padding: "0.25rem",
+              borderRadius: "0.25rem",
+              fontWeight: "400",
             },
-            'pre code': {
-              backgroundColor: 'transparent',
-              borderWidth: '0',
-              borderRadius: '0',
-              padding: '0',
-              fontWeight: '400',
+            "pre code": {
+              backgroundColor: "transparent",
+              borderWidth: "0",
+              borderRadius: "0",
+              padding: "0",
+              fontWeight: "400",
             },
             pre: {
-              backgroundColor: 'rgb(0 0 0 / 0.3)',
-              padding: '0.75rem 1rem',
-              borderRadius: '0.375rem',
+              backgroundColor: "rgb(0 0 0 / 0.3)",
+              padding: "0.75rem 1rem",
+              borderRadius: "0.375rem",
             },
           },
         },
       },
     },
   },
-  plugins: [
-    tailwindcssAnimate,
-    typography,
-  ],
-}
+  plugins: [tailwindcssAnimate, typography],
+};

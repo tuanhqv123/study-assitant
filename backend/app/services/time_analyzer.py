@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import calendar
 import json
 from ..utils.logger import Logger
+from unidecode import unidecode
 
 logger = Logger()
 
@@ -28,7 +29,32 @@ class TimeAnalyzer:
         if not question or question.strip() == '':
             logger.log_with_timestamp("TIME ANALYSIS", "Empty question, returning default today")
             return (self.today, 'today', 'default')
-            
+        
+        # Normalize query về không dấu, chữ thường
+        question_normalized = unidecode(question.lower())
+        
+        # --- Ưu tiên nhận diện tuần có ngày/tháng/năm ---
+        week_with_full_date_patterns = [
+            r"tuan.*ngay[\s:]*([0-9]{1,2})[/-]([0-9]{1,2})(?:[/-]([0-9]{4}))?",  # tuan ... ngay DD/MM(/YYYY)
+            r"tuan[\s:]*([0-9]{1,2})[/-]([0-9]{1,2})(?:[/-]([0-9]{4}))?",         # tuan DD/MM(/YYYY)
+            r"tuan[\s:]*([0-9]{1,2}) thang[\s:]*([0-9]{1,2})(?: nam[\s:]*([0-9]{4}))?"  # tuan 21 thang 4 (nam 2025)
+        ]
+        import re
+        for pattern in week_with_full_date_patterns:
+            matches = re.search(pattern, question_normalized)
+            if matches:
+                day = int(matches.group(1))
+                month = int(matches.group(2)) if matches.lastindex >= 2 and matches.group(2) else self.today.month
+                year = int(matches.group(3)) if matches.lastindex >= 3 and matches.group(3) else self.today.year
+                try:
+                    target_date = datetime(year, month, day).date()
+                except ValueError:
+                    continue
+                start_of_week = target_date - timedelta(days=target_date.weekday())
+                end_of_week = start_of_week + timedelta(days=6)
+                logger.log_with_timestamp("TIME ANALYSIS", f"[REGEX] Detected week with full date: {matches.group(0)} => {target_date.strftime('%d/%m/%Y')}, week: {start_of_week.strftime('%d/%m/%Y')} - {end_of_week.strftime('%d/%m/%Y')}")
+                return ((start_of_week, end_of_week), 'specific_week', matches.group(0))
+        
         # DIRECT PATTERN MATCHING for common Vietnamese weekday references
         # This approach bypasses the AI-based analysis for common weekday references
         import re

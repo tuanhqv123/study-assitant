@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import MessageItem from "./MessageItem";
 import ChatInput from "./ChatInput";
 import Settings from "./Settings";
+import AgentSelector from "./AgentSelector";
 import { X, Settings as SettingsIcon } from "lucide-react";
 // Import theme toggle
 import { ThemeToggle } from "./ui/theme-toggle";
@@ -17,6 +18,7 @@ const ChatInterface = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeFileContext, setActiveFileContext] = useState(null);
+  const [selectedAgent, setSelectedAgent] = useState(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -44,6 +46,17 @@ const ChatInterface = () => {
           // Load most recent chat
           setActiveChat(data[0].id);
           loadMessages(data[0].id);
+
+          // Load agent preference if exists
+          const { data: chatData } = await supabase
+            .from("chat_sessions")
+            .select("agent_id")
+            .eq("id", data[0].id)
+            .single();
+
+          if (chatData && chatData.agent_id) {
+            setSelectedAgent(chatData.agent_id);
+          }
         } else {
           // Create a new chat session if user has none
           await createNewChatSession(user.id);
@@ -59,14 +72,41 @@ const ChatInterface = () => {
       .select("*")
       .eq("chat_id", chatId)
       .order("created_at", { ascending: true });
+
+    // Debug sources
+    if (data && data.length > 0) {
+      console.log("Loaded messages from DB:", data.length);
+      // Kiểm tra xem có message nào có sources không
+      const messagesWithSources = data.filter(
+        (msg) => msg.sources && msg.sources.length > 0
+      );
+      console.log("Messages with sources:", messagesWithSources.length);
+      if (messagesWithSources.length > 0) {
+        console.log("First message with sources:", messagesWithSources[0]);
+      }
+    }
+
     setMessages(data || []);
+
+    // Load agent preference when switching chats
+    const { data: chatData } = await supabase
+      .from("chat_sessions")
+      .select("agent_id")
+      .eq("id", chatId)
+      .single();
+
+    if (chatData && chatData.agent_id) {
+      setSelectedAgent(chatData.agent_id);
+    } else {
+      setSelectedAgent(null); // Reset to default if no agent is set
+    }
   };
 
   // New function to create a chat session
   const createNewChatSession = async (userId) => {
     const { data, error } = await supabase
       .from("chat_sessions")
-      .insert([{ user_id: userId }])
+      .insert([{ user_id: userId, agent_id: selectedAgent }])
       .select()
       .single();
 
@@ -119,6 +159,42 @@ const ChatInterface = () => {
     scrollToBottom();
   }, [messages]);
 
+  // Handle agent selection change
+  const handleAgentChange = async (agentId) => {
+    setSelectedAgent(agentId);
+
+    // Save the selected agent to the current chat session
+    if (activeChat) {
+      try {
+        await supabase
+          .from("chat_sessions")
+          .update({ agent_id: agentId })
+          .eq("id", activeChat);
+
+        // Add a system message indicating agent change
+        const { data: agentData } = await fetch(
+          "http://localhost:8000/agents"
+        ).then((res) => res.json());
+        const agents = agentData?.agents || [];
+        const newAgent = agents.find((a) => a.id === agentId);
+
+        if (newAgent) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "system",
+              content: `Switched to ${newAgent.display_name} ${newAgent.avatar}. ${newAgent.description}`,
+              chat_id: activeChat,
+              created_at: new Date().toISOString(),
+            },
+          ]);
+        }
+      } catch (error) {
+        console.error("Error updating agent for chat session:", error);
+      }
+    }
+  };
+
   // Handle file upload success from ChatInput
   const handleFileUpload = (fileId, fileName) => {
     setActiveFileContext({ id: fileId, name: fileName });
@@ -148,8 +224,8 @@ const ChatInterface = () => {
     setActiveFileContext(null);
   };
 
-  // Update sendMessage to include file_id
-  const handleSendMessage = async (message) => {
+  // Update sendMessage to include web_search_enabled
+  const handleSendMessage = async (message, webSearchEnabled) => {
     if (!message.trim() || isLoading) return;
     setIsLoading(true);
 
@@ -198,6 +274,9 @@ const ChatInterface = () => {
         user_id: user?.id || null,
         university_credentials: credentials || null,
         file_id: activeFileContext?.id,
+        agent_id: selectedAgent,
+        web_search_enabled: webSearchEnabled || false,
+        chat_id: activeChat, // Thêm chat_id để backend có thể lưu tin nhắn
       };
 
       console.log("Sending chat request with user ID:", user?.id);
@@ -207,8 +286,12 @@ const ChatInterface = () => {
         console.log("No university credentials found for user");
       }
 
+      if (webSearchEnabled) {
+        console.log("Web search is enabled for this request");
+      }
+
       try {
-        const response = await fetch("http://localhost:5000/chat", {
+        const response = await fetch("http://localhost:8000/chat", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -236,6 +319,12 @@ const ChatInterface = () => {
           created_at: new Date().toISOString(),
         };
 
+        // If this is a web search result, add the sources
+        if (data.web_search_results && data.sources) {
+          assistantMessage.sources = data.sources;
+          assistantMessage.web_search_results = true;
+        }
+
         setMessages((prev) => [...prev, assistantMessage]);
 
         // Save assistant's message to Supabase
@@ -247,6 +336,12 @@ const ChatInterface = () => {
           console.error(
             "Error saving assistant message to database:",
             assistantInsertError
+          );
+          console.log("Failed to save message:", assistantMessage);
+        } else {
+          console.log(
+            "Successfully saved assistant message with sources:",
+            assistantMessage.sources ? assistantMessage.sources.length : 0
           );
         }
       } catch (requestError) {
@@ -384,16 +479,6 @@ const ChatInterface = () => {
               <p className="text-sm text-muted-foreground truncate">
                 {user.email}
               </p>
-              <div className="flex items-center space-x-2">
-                <ThemeToggle />
-                <button
-                  onClick={() => setSettingsOpen(true)}
-                  className="p-1.5 rounded-full bg-secondary hover:bg-accent transition-colors"
-                  aria-label="Settings"
-                >
-                  <SettingsIcon className="h-4 w-4 text-muted-foreground" />
-                </button>
-              </div>
             </div>
             <button
               onClick={handleLogout}
@@ -414,6 +499,44 @@ const ChatInterface = () => {
       )}
       {/* Chat Area - scrollable area with fixed position */}
       <div className="flex-1 flex flex-col h-screen overflow-hidden">
+        {/* Sticky header */}
+        <div className="sticky top-0 bg-card/90 backdrop-blur-sm border-b border-border z-10 shadow-sm">
+          <div className="flex items-center justify-between px-8 py-3">
+            <div className="flex items-center gap-3">
+              <div className="w-50">
+                <AgentSelector
+                  selectedAgent={selectedAgent}
+                  onAgentChange={handleAgentChange}
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {activeFileContext && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-accent/50 rounded-md text-xs">
+                  <span className="truncate max-w-[200px]">
+                    {activeFileContext.name}
+                  </span>
+                  <button
+                    onClick={clearFileContext}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
+              <div className="flex items-center space-x-4">
+                <ThemeToggle />
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  className="p-1.5 rounded-full bg-secondary hover:bg-accent transition-colors"
+                  aria-label="Settings"
+                >
+                  <SettingsIcon className="h-4 w-4 text-muted-foreground" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
         <div className="flex-1 overflow-y-auto pb-32">
           <div className="mx-auto p-4">
             {messages.map((message, index) => (
@@ -444,7 +567,7 @@ const ChatInterface = () => {
           </div>
         </div>
         <div className="absolute bottom-0 left-64 right-0 bg-background">
-          <div className="mx-auto max-w-3xl">
+          <div className="mx-auto max-w-2xl px-4 pb-4">
             <ChatInput
               onSendMessage={handleSendMessage}
               isLoading={isLoading}

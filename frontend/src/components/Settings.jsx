@@ -65,7 +65,7 @@ const Settings = ({ isOpen, onClose, userId }) => {
 
     try {
       // Use our new endpoint that returns raw login data
-      const response = await fetch("http://localhost:5000/ptit-login", {
+      const response = await fetch("http://localhost:8000/ptit-login", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

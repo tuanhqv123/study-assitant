@@ -1,7 +1,7 @@
 import os
 import uuid
 import random
-import hashlib
+from sentence_transformers import SentenceTransformer
 from werkzeug.utils import secure_filename
 from ..lib.supabase import supabase
 from ..utils.logger import Logger
@@ -10,25 +10,30 @@ logger = Logger()
 
 class FileService:
     def __init__(self):
-        # Sử dụng simple embedding thay vì mô hình ML phức tạp
         try:
-            self.embedding_dimension = 384  # Kích thước vector giống model thật
-            logger.log_with_timestamp('FILE_SERVICE', 'Simple embedding system initialized')
+            # Load sentence-transformers model
+            self.model = SentenceTransformer('all-MiniLM-L6-v2')
+            self.embedding_dimension = 384  # Matches the model dimension
+            logger.log_with_timestamp('FILE_SERVICE', 'Sentence transformer model initialized')
         except Exception as e:
-            logger.log_with_timestamp('FILE_SERVICE_ERROR', f'Failed to initialize: {e}')
+            logger.log_with_timestamp('FILE_SERVICE_ERROR', f'Failed to initialize model: {e}')
             raise
 
-    def _create_simple_embedding(self, text):
-        """Tạo vector embedding đơn giản từ text sử dụng hash"""
-        # Sử dụng MD5 hash để tạo một giá trị ngẫu nhiên nhưng nhất quán
-        hash_obj = hashlib.md5(text.encode('utf-8'))
-        hash_value = int(hash_obj.hexdigest(), 16)
-        
-        # Khởi tạo random generator với hash value làm seed
-        random.seed(hash_value)
-        
-        # Tạo vector có kích thước 384 (giống model thật) với giá trị ngẫu nhiên từ -1 đến 1
-        return [random.uniform(-1, 1) for _ in range(self.embedding_dimension)]
+    def _create_embedding(self, text):
+        """Generate proper embedding using sentence-transformers"""
+        try:
+            # Handle empty or very short text
+            if not text or len(text.strip()) < 3:
+                text = "empty document"
+                
+            # Get embedding from the model
+            embedding = self.model.encode(text)
+            # Convert to list for Supabase compatibility
+            return embedding.tolist()
+        except Exception as e:
+            logger.log_with_timestamp('FILE_SERVICE_ERROR', f'Embedding generation error: {e}')
+            # Fallback to zeros in case of error
+            return [0.0] * self.embedding_dimension
 
     def save_file_and_chunks_to_supabase(self, user_id, file, file_content):
         """
@@ -56,8 +61,8 @@ class FileService:
         # chunk text
         chunks = [ file_content[i:i+500] for i in range(0, len(file_content), 400) ]
         
-        # generate simple embeddings
-        embeddings = [self._create_simple_embedding(chunk) for chunk in chunks]
+        # generate real embeddings using sentence-transformers
+        embeddings = [self._create_embedding(chunk) for chunk in chunks]
         
         # prepare records
         records = []
@@ -84,17 +89,17 @@ class FileService:
         Query Supabase RPC to retrieve top_k similar chunks for given query and file.
         Returns list of text chunks.
         """
-        # generate simple query embedding
-        emb = self._create_simple_embedding(query)
+        # generate embedding for query using sentence-transformers
+        emb = self._create_embedding(query)
         
         try:
-            # Giảm ngưỡng tương đồng xuống để có nhiều kết quả hơn
-            match_threshold = 0.2  # Giảm xuống 0.2 để lấy nhiều kết quả hơn
+            # Set cosine similarity threshold for semantic matching
+            match_threshold = 0.5  # Higher value for better quality matches
             
-            # call RPC for vector search
+            # call RPC for vector search - Cập nhật tham số file_id thành p_file_id để phù hợp với SQL function
             response = supabase.rpc('match_file_chunks', {
                 'query_embedding': emb,
-                'match_file_id': file_id,
+                'p_file_id': file_id,  # Đã đổi từ match_file_id thành p_file_id
                 'match_threshold': match_threshold,
                 'match_count': top_k
             }).execute()
@@ -248,11 +253,11 @@ class FileService:
         try:
             # Tăng số lượng chunks từ 5 lên 10
             top_k = 10
-            # Giảm ngưỡng tương đồng xuống 0.2 để có nhiều kết quả hơn
-            match_threshold = 0.2
+            # Set cosine similarity threshold for semantic matching
+            match_threshold = 0.5  # Higher value for better quality matches
             
-            # Embed câu query
-            embedding = self._create_simple_embedding(query)
+            # Embed câu query với sentence-transformers
+            embedding = self._create_embedding(query)
             
             # Vector search với số lượng chunks tăng lên
             response = supabase.rpc(
