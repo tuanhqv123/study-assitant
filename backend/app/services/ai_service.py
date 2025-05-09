@@ -15,28 +15,29 @@ logger = Logger()
 class AiService:
     def __init__(self):
         # OpenRouter API Configuration
-        self.OPENROUTER_API_KEY = "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"
+        self.OPENROUTER_API_KEY = "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"
         self.DEFAULT_MODEL = "mistralai/mistral-small-3.1-24b-instruct:free" 
         
         # Initialize OpenAI client with OpenRouter configuration
-        self._initialize_client()
+        try:
+            # Cách 1: Không dùng tham số proxies
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=self.OPENROUTER_API_KEY
+            )
+        except TypeError:
+            # Cách 2: Nếu có lỗi, thử tạo httpx client trước
+            http_client = httpx.Client()
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=self.OPENROUTER_API_KEY,
+                http_client=http_client
+            )
             
         # Initialize web search service
         self.web_search_service = WebSearchService()
         # Initialize web scraper service
         self.web_scraper_service = WebScraperService()
-
-    async def _initialize_client(self):
-        """Initialize OpenAI client with proxy handling and retry logic."""
-        try:
-            # Cách 1: Thử cách đơn giản trước
-            self.client = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=self.OPENROUTER_API_KEY,
-            )
-        except Exception as e:
-            logger.error(f"Lỗi khi khởi tạo OpenAI client: {str(e)}")
-            raise
 
     # PlantUML encoding for plantuml.com service
     @staticmethod
