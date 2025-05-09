@@ -15,7 +15,8 @@ class QueryClassifier:
             'general',     # Tư vấn học tập chung
             'other',       # Không liên quan đến học tập
             'date_query',  # Truy vấn về ngày cụ thể
-            'uml'          # UML/PlantUML queries
+            'uml',         # UML/PlantUML queries
+            'examschedule' # Lịch thi
         ]
 
     def normalize_vietnamese(self, text):
@@ -56,10 +57,10 @@ class QueryClassifier:
             }
             
         # Then try schedule-related classification (faster)
-        is_schedule, keyword = self.is_schedule_related(text)
+        is_schedule, keyword, category = self.is_schedule_related(text)
         if is_schedule:
             return {
-                'category': 'schedule',
+                'category': category,
                 'confidence': 0.9,
                 'method': 'keyword',
                 'keyword': keyword
@@ -71,45 +72,76 @@ class QueryClassifier:
     def is_schedule_related(self, text):
         """
         Check if the text is related to schedule queries
-        Returns: (bool, matched_keyword)
+        Returns: (bool, matched_keyword, category)
         """
         # Convert to lowercase and normalize
         text_normalized = self.normalize_vietnamese(text.lower())
         text_lower = text.lower()
 
-        # Define schedule related patterns in Vietnamese and English
-        schedule_keywords = {
+        # Define exam schedule related patterns in Vietnamese and English
+        exam_schedule_keywords = {
             'vn': [
-                'lịch học', 'thời khóa biểu', 'lịch thi', 'khi nào học', 'tiết học', 
-                'phòng học', 'khi nào thi', 'lịch', 'ngày thi', 'ca thi'
+                'lịch thi', 'kì thi', 'kỳ thi', 'ngày thi', 'ca thi', 'phòng thi',
+                'lịch kiểm tra', 'lịch kỳ thi', 'khi nào thi', 'thời gian thi',
+                'lịch cuối kỳ', 'thi cuối kỳ', 'thi giữa kỳ', 'thi học kỳ',
+                'địa điểm thi', 'hình thức thi', 'lịch final', 'tuần thi',
+                'lịch thi tuần này', 'lịch thi tuần sau', 'thi trong tuần',
+                'tuần này thi', 'tuần sau thi', 'thi trong tuần này', 'thi trong tuần sau',
+                'lịch thi của tuần', 'kỳ thi tuần', 'kỳ thi trong tuần'
             ],
             'vn_no_accent': [
-                'lich hoc', 'thoi khoa bieu', 'lich thi', 'khi nao hoc', 'tiet hoc',
-                'phong hoc', 'khi nao thi', 'lich', 'ngay thi', 'ca thi'
+                'lich thi', 'ki thi', 'ky thi', 'ngay thi', 'ca thi', 'phong thi',
+                'lich kiem tra', 'lich ky thi', 'khi nao thi', 'thoi gian thi',
+                'lich cuoi ky', 'thi cuoi ky', 'thi giua ky', 'thi hoc ky',
+                'dia diem thi', 'hinh thuc thi', 'lich final', 'tuan thi',
+                'lich thi tuan nay', 'lich thi tuan sau', 'thi trong tuan',
+                'tuan nay thi', 'tuan sau thi', 'thi trong tuan nay', 'thi trong tuan sau',
+                'lich thi cua tuan', 'ky thi tuan', 'ky thi trong tuan'
             ],
             'en': [
-                'schedule', 'timetable', 'class schedule', 'exam schedule', 'when is class',
-                'classroom', 'when is exam', 'calendar', 'exam date', 'class time'
+                'exam schedule', 'test schedule', 'exam date', 'exam time', 'exam room',
+                'final exam', 'midterm exam', 'examination', 'final schedule',
+                'test date', 'when is the exam', 'exam location', 'exam format',
+                'exam week', 'week of exams', 'week of tests', 'this week exams',
+                'next week exams', 'exams this week', 'exams next week'
             ]
         }
 
-        # Check Vietnamese with accents
-        for keyword in schedule_keywords['vn']:
-            if keyword in text_lower:
-                return True, keyword
-                
-        # Check Vietnamese without accents
-        for keyword in schedule_keywords['vn_no_accent']:
-            if keyword in text_normalized:
-                return True, keyword
+        # Define regular class schedule related patterns in Vietnamese and English
+        class_schedule_keywords = {
+            'vn': [
+                'lịch học', 'thời khóa biểu', 'khi nào học', 'tiết học', 
+                'phòng học', 'lịch', 'giờ học', 'ca học', 'buổi học'
+            ],
+            'vn_no_accent': [
+                'lich hoc', 'thoi khoa bieu', 'khi nao hoc', 'tiet hoc',
+                'phong hoc', 'lich', 'gio hoc', 'ca hoc', 'buoi hoc'
+            ],
+            'en': [
+                'class schedule', 'timetable', 'when is class',
+                'classroom', 'calendar', 'class time', 'lecture schedule',
+                'lecture time', 'class hours'
+            ]
+        }
+
+        # Check for exam schedule keywords
+        for category in exam_schedule_keywords.values():
+            for keyword in category:
+                if keyword in text_lower or keyword in text_normalized:
+                    return True, keyword, 'examschedule'
         
-        # Check English
-        for keyword in schedule_keywords['en']:
-            if keyword in text_normalized or keyword in text_lower:
-                return True, keyword
+        # Special check for "tuan" and "thi" combinations
+        if ('tuần' in text_lower or 'tuan' in text_normalized) and ('thi' in text_lower or 'thi' in text_normalized):
+            return True, 'tuần thi', 'examschedule'
+                    
+        # Check for class schedule keywords
+        for category in class_schedule_keywords.values():
+            for keyword in category:
+                if keyword in text_lower or keyword in text_normalized:
+                    return True, keyword, 'schedule'
         
         # Not schedule-related
-        return False, None
+        return False, None, None
         
     def is_date_query(self, text):
         """

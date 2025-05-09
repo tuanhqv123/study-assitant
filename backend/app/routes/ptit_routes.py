@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from ..services.ptit_auth_service import PTITAuthService
 from ..services.schedule_service import ScheduleService
+from ..services.exam_schedule_service import ExamScheduleService
 from ..utils.logger import Logger
 
 ptit_bp = Blueprint('ptit', __name__)
@@ -8,6 +9,7 @@ logger = Logger()
 
 auth_service = PTITAuthService()
 schedule_service = ScheduleService(auth_service)
+exam_schedule_service = ExamScheduleService(auth_service)
 
 @ptit_bp.route('/login', methods=['POST'])
 def login():
@@ -56,6 +58,40 @@ async def get_schedule():
 
     except Exception as e:
         logger.log_with_timestamp("SCHEDULE ERROR", str(e))
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@ptit_bp.route('/exam-schedule', methods=['GET'])
+async def get_exam_schedule():
+    """Get exam schedule data"""
+    try:
+        if not exam_schedule_service.check_auth():
+            return jsonify({
+                'success': False,
+                'error': 'Not authenticated. Please log in first.'
+            }), 401
+
+        # Get parameters with defaults
+        hoc_ky = request.args.get('semester', None)
+        is_giua_ky = request.args.get('is_midterm', 'false').lower() == 'true'
+        
+        # Get exam schedule data
+        exam_data = await exam_schedule_service.get_exam_schedule_by_semester(hoc_ky, is_giua_ky)
+        if not exam_data:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to retrieve exam schedule'
+            }), 500
+
+        return jsonify({
+            'success': True,
+            'data': exam_data
+        })
+
+    except Exception as e:
+        logger.log_with_timestamp("EXAM SCHEDULE ERROR", str(e))
         return jsonify({
             'success': False,
             'error': str(e)

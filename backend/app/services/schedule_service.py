@@ -53,185 +53,237 @@ class ScheduleService:
         """
         Extract date references from a question like "today", "tomorrow", "next Monday", etc.
         Returns a tuple of (referenced_date, date_type, original_text)
-        
-        This method now uses AI-based time analysis if available, falling back to regex patterns
-        if AI service is not configured.
         """
-        # Use AI-based time analyzer if available
-        if self.time_analyzer and self.ai_service:
-            logger.log_with_timestamp("SCHEDULE API", "Using AI-based time analysis")
-            time_analysis_result = self.time_analyzer.analyze_time_references(question)
-            # Check if the time analyzer returned a valid result
-            if time_analysis_result is not None:
-                return time_analysis_result
-            else:
-                # If time analyzer returns None, log it and fall back to regex
-                logger.log_with_timestamp("SCHEDULE API", "AI-based time analysis returned None, falling back to regex")
-        
-        # Fallback to regex-based analysis if AI service is not available
-        logger.log_with_timestamp("SCHEDULE API", "Falling back to regex-based time analysis")
-        
-        # Convert to lowercase và normalize (bỏ dấu)
+        # Convert to lowercase and normalize (remove diacritics)
         question_normalized = self.normalize_vietnamese(question.lower())
         question_lower = question.lower()
         
-        # Chỉ cần pattern không dấu cho tuần có ngày/tháng/năm
-        week_with_full_date_patterns = [
-            r"tuan.*ngay[\s:]*([0-9]{1,2})[/-]([0-9]{1,2})(?:[/-]([0-9]{4}))?",  # tuan ... ngay DD/MM(/YYYY)
-            r"tuan[\s:]*([0-9]{1,2})[/-]([0-9]{1,2})(?:[/-]([0-9]{4}))?",         # tuan DD/MM(/YYYY)
-            r"tuan[\s:]*([0-9]{1,2}) thang[\s:]*([0-9]{1,2})(?: nam[\s:]*([0-9]{4}))?"  # tuan 21 thang 4 (nam 2025)
+        # Clear debuggin logging
+        logger.log_with_timestamp("DATE EXTRACTION", f"Processing: '{question}'")
+        logger.log_with_timestamp("DATE EXTRACTION", f"Normalized: '{question_normalized}'")
+        
+        # PRIORITY 1: Check for Vietnamese dates with "ngay" and "thang" anywhere in the text
+        # This handles "ngay 7 thang 3" and similar patterns with other text between
+        day_match = re.search(r'ngay\s+(\d{1,2})', question_normalized)
+        month_match = re.search(r'thang\s+(\d{1,2})', question_normalized)
+        
+        if day_match and month_match:
+            try:
+                day = int(day_match.group(1))
+                month = int(month_match.group(1))
+                year = self.today.year
+                
+                # Look for year pattern
+                year_match = re.search(r'nam\s+(\d{4})', question_normalized)
+                if year_match:
+                    year = int(year_match.group(1))
+                
+                specific_date = datetime(year, month, day).date()
+                matched_text = f"ngay {day} thang {month}"
+                
+                logger.log_with_timestamp("DATE EXTRACTION", f"✓ Found Vietnamese date: day={day}, month={month}, year={year}")
+                logger.log_with_timestamp("DATE EXTRACTION", f"✓ Extracted date: {specific_date.strftime('%d/%m/%Y')} from '{matched_text}'")
+                
+                # Check if this is a week query
+                if 'tuan' in question_normalized:
+                    start_of_week = specific_date - timedelta(days=specific_date.weekday())
+                    end_of_week = start_of_week + timedelta(days=6)
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✓ Week query detected. Week range: {start_of_week.strftime('%d/%m/%Y')} - {end_of_week.strftime('%d/%m/%Y')}")
+                    return ((start_of_week, end_of_week), 'specific_week', matched_text)
+                else:
+                    return (specific_date, 'specific_date', matched_text)
+            except ValueError as e:
+                logger.log_with_timestamp("DATE EXTRACTION", f"✗ Error with Vietnamese date: {str(e)}")
+        
+        # PRIORITY 2: Check for more explicit date patterns like DD/MM or MM/DD format
+        explicit_date_patterns = [
+            (r'(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}))?', False),  # DD/MM or DD/MM/YYYY
+            (r'ngày\s+(\d{1,2})[/-](\d{1,2})', False),            # ngày DD/MM
+            (r'ngay\s+(\d{1,2})[/-](\d{1,2})', False),           # ngay DD/MM
+            (r'ngày\s+(\d{1,2})\s+tháng\s+(\d{1,2})(?:\s+năm\s+(\d{4}))?', False),  # ngày DD tháng MM (năm YYYY)
+            (r'ngay\s+(\d{1,2})\s+thang\s+(\d{1,2})(?:\s+nam\s+(\d{4}))?', False),  # ngay DD thang MM (nam YYYY)
+            (r'(\d{1,2})\s+tháng\s+(\d{1,2})(?:\s+năm\s+(\d{4}))?', False),       # DD tháng MM (năm YYYY)
+            (r'(\d{1,2})\s+thang\s+(\d{1,2})(?:\s+nam\s+(\d{4}))?', False),        # DD thang MM (nam YYYY)
+            (r'tháng\s+(\d{1,2})\s+ngày\s+(\d{1,2})(?:\s+năm\s+(\d{4}))?', True),    # tháng MM ngày DD (năm YYYY)
+            (r'thang\s+(\d{1,2})\s+ngay\s+(\d{1,2})(?:\s+nam\s+(\d{4}))?', True)   # thang MM ngay DD (nam YYYY)
         ]
-        for pattern in week_with_full_date_patterns:
-            matches = re.search(pattern, question_normalized)
-            if matches:
-                day = int(matches.group(1))
-                month = int(matches.group(2)) if matches.lastindex >= 2 and matches.group(2) else self.today.month
-                year = int(matches.group(3)) if matches.lastindex >= 3 and matches.group(3) else self.today.year
+        
+        for pattern, month_first in explicit_date_patterns:
+            match = re.search(pattern, question_normalized)
+            if match:
                 try:
-                    target_date = datetime(year, month, day).date()
-                except ValueError:
-                    continue
-                start_of_week = target_date - timedelta(days=target_date.weekday())
-                end_of_week = start_of_week + timedelta(days=6)
-                return ((start_of_week, end_of_week), 'specific_week', matches.group(0))
-
-        # Chỉ cần pattern không dấu cho tuần có ngày
+                    if month_first:
+                        month = int(match.group(1))
+                        day = int(match.group(2))
+                    else:
+                        day = int(match.group(1))
+                        month = int(match.group(2))
+                    
+                    year = int(match.group(3)) if len(match.groups()) >= 3 and match.group(3) else self.today.year
+                    
+                    specific_date = datetime(year, month, day).date()
+                    matched_text = match.group(0)
+                    
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✓ Found explicit date: {specific_date.strftime('%d/%m/%Y')} from pattern '{pattern}'")
+                    
+                    # Check for "tuan" to determine if it's a week query
+                    if 'tuan' in question_normalized:
+                        start_of_week = specific_date - timedelta(days=specific_date.weekday())
+                        end_of_week = start_of_week + timedelta(days=6)
+                        logger.log_with_timestamp("DATE EXTRACTION", f"✓ Week query detected for explicit date")
+                        return ((start_of_week, end_of_week), 'specific_week', matched_text)
+                    
+                    return (specific_date, 'specific_date', matched_text)
+                except ValueError as e:
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✗ Error with explicit date pattern: {str(e)}")
+        
+        # PRIORITY 3: Handle week patterns
         week_with_date_patterns = [
-            r'tuan co ngay (\d{1,2})',  # tuan co ngay DD
-            r'tuan.*ngay (\d{1,2})'     # tuan ... ngay DD
+            r"tuan.*ngay\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}))?",  # tuan ... ngay DD/MM(/YYYY)
+            r"tuan\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}))?",         # tuan DD/MM(/YYYY)
+            r"tuan\s+(\d{1,2})\s+thang\s+(\d{1,2})(?:\s+nam\s+(\d{4}))?",  # tuan 21 thang 4 (nam 2025)
+            r"tuan\s+ngay\s+(\d{1,2})\s+thang\s+(\d{1,2})(?:\s+nam\s+(\d{4}))?",  # tuan ngay 21 thang 4 (nam 2025)
+            r"tuan\s+hoc\s+(\d{1,2})\s+thang\s+(\d{1,2})(?:\s+nam\s+(\d{4}))?",  # tuan hoc 21 thang 4 (nam 2025)
+            r"tuan\s+hoc\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}))?"  # tuan hoc 21/4(/2025)
         ]
+        
         for pattern in week_with_date_patterns:
-            matches = re.search(pattern, question_normalized)
-            if matches:
-                day = int(matches.group(1))
-                target_date = None
+            match = re.search(pattern, question_normalized)
+            if match:
                 try:
-                    target_date = datetime(self.today.year, self.today.month, day).date()
-                    if target_date < self.today and day < 15:
-                        next_month = self.today.month + 1 if self.today.month < 12 else 1
-                        next_year = self.today.year if self.today.month < 12 else self.today.year + 1
-                        target_date = datetime(next_year, next_month, day).date()
-                except ValueError:
-                    try:
-                        next_month = self.today.month + 1 if self.today.month < 12 else 1
-                        next_year = self.today.year if self.today.month < 12 else self.today.year + 1
-                        target_date = datetime(next_year, next_month, day).date()
-                    except ValueError:
-                        continue
-                if target_date:
+                    day = int(match.group(1))
+                    month = int(match.group(2)) if len(match.groups()) >= 2 and match.group(2) else self.today.month
+                    year = int(match.group(3)) if len(match.groups()) >= 3 and match.group(3) else self.today.year
+                    
+                    target_date = datetime(year, month, day).date()
                     start_of_week = target_date - timedelta(days=target_date.weekday())
                     end_of_week = start_of_week + timedelta(days=6)
-                    return ((start_of_week, end_of_week), 'specific_week', matches.group(0))
+                    
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✓ Found week pattern: {match.group(0)}")
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✓ Week range: {start_of_week.strftime('%d/%m/%Y')} - {end_of_week.strftime('%d/%m/%Y')}")
+                    
+                    return ((start_of_week, end_of_week), 'specific_week', match.group(0))
+                except ValueError as e:
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✗ Error with week pattern: {str(e)}")
         
-        # Define date reference patterns in Vietnamese and English
-        date_patterns = {
-            # Today references
+        # PRIORITY 4: Handle day-only queries "ngay X"
+        if day_match and not month_match:
+            try:
+                day = int(day_match.group(1))
+                month = self.today.month
+                year = self.today.year
+                
+                # If the day is in the past for the current month, try next month
+                target_date = datetime(year, month, day).date()
+                if target_date < self.today and day < 15:
+                    next_month = month + 1 if month < 12 else 1
+                    next_year = year if month < 12 else year + 1
+                    try:
+                        target_date = datetime(next_year, next_month, day).date()
+                    except ValueError:
+                        pass  # Keep the original target_date if next month's date is invalid
+                
+                matched_text = day_match.group(0)
+                logger.log_with_timestamp("DATE EXTRACTION", f"✓ Found day-only reference: day={day}, using current month/year")
+                logger.log_with_timestamp("DATE EXTRACTION", f"✓ Extracted date: {target_date.strftime('%d/%m/%Y')}")
+                
+                # Check if this is a week query
+                if 'tuan' in question_normalized:
+                    start_of_week = target_date - timedelta(days=target_date.weekday())
+                    end_of_week = start_of_week + timedelta(days=6)
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✓ Week query for day-only reference")
+                    return ((start_of_week, end_of_week), 'specific_week', matched_text)
+                
+                return (target_date, 'specific_date', matched_text)
+            except ValueError as e:
+                logger.log_with_timestamp("DATE EXTRACTION", f"✗ Error with day-only reference: {str(e)}")
+        
+        # PRIORITY 5: Check for common references like "today", "tomorrow", etc.
+        date_references = {
             'today': ['hôm nay', 'ngày hôm nay', 'ngay hom nay', 'today', 'this day', 'hnay'],
-            # Tomorrow references
             'tomorrow': ['ngày mai', 'mai', 'tomorrow', 'ngay mai', 'hôm sau', 'hom sau'],
-            # Yesterday references 
             'yesterday': ['hôm qua', 'hom qua', 'yesterday', 'qua'],
-            # Day after tomorrow
             'day_after_tomorrow': ['ngày kia', 'ngay kia', 'kia', 'ngày mốt', 'ngay mot', 'mốt', 'mot'],
-            # This week
-            'this_week': ['tuần này', 'tuan nay', 'this week', 'trong tuần'],
-            # Next week
+            'this_week': ['tuần này', 'tuan nay', 'this week', 'trong tuần', 'tuan', 'tuần'],
             'next_week': ['tuần sau', 'tuần tới', 'tuan sau', 'tuan toi', 'next week'],
-            # This month
-            'this_month': ['tháng này', 'thang nay', 'this month'],
-            # Specific weekdays
-            'monday': ['thứ hai', 'thu 2', 'thu hai', 'monday', 't2'],
-            'tuesday': ['thứ ba', 'thu 3', 'thu ba', 'tuesday', 't3'],
-            'wednesday': ['thứ tư', 'thu 4', 'thu tu', 'wednesday', 't4'],
-            'thursday': ['thứ năm', 'thu 5', 'thu nam', 'thursday', 't5'],
-            'friday': ['thứ sáu', 'thu 6', 'thu sau', 'friday', 't6'],
-            'saturday': ['thứ bảy', 'thu 7', 'thu bay', 'saturday', 't7'],
-            'sunday': ['chủ nhật', 'chu nhat', 'sunday', 'cn']
+            'this_month': ['tháng này', 'thang nay', 'this month']
         }
         
-        # Check for date references
-        for date_type, patterns in date_patterns.items():
-            for pattern in patterns:
-                if pattern in question_normalized or pattern in question_lower:
-                    # Calculate the referenced date
-                    if date_type == 'today':
-                        return (self.today, 'today', pattern)
-                    elif date_type == 'tomorrow':
-                        return (self.today + timedelta(days=1), 'tomorrow', pattern)
-                    elif date_type == 'yesterday':
-                        return (self.today - timedelta(days=1), 'yesterday', pattern)
-                    elif date_type == 'day_after_tomorrow':
-                        return (self.today + timedelta(days=2), 'day_after_tomorrow', pattern)
-                    elif date_type == 'this_week':
-                        # Return the whole week
+        for ref_type, phrases in date_references.items():
+            for phrase in phrases:
+                if phrase in question_normalized or phrase in question_lower:
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✓ Found date reference: {phrase} ({ref_type})")
+                    
+                    if ref_type == 'today':
+                        return (self.today, 'today', phrase)
+                    elif ref_type == 'tomorrow':
+                        return (self.today + timedelta(days=1), 'tomorrow', phrase)
+                    elif ref_type == 'yesterday':
+                        return (self.today - timedelta(days=1), 'yesterday', phrase)
+                    elif ref_type == 'day_after_tomorrow':
+                        return (self.today + timedelta(days=2), 'day_after_tomorrow', phrase)
+                    elif ref_type == 'this_week':
                         start_of_week = self.today - timedelta(days=self.today.weekday())
                         end_of_week = start_of_week + timedelta(days=6)
-                        return ((start_of_week, end_of_week), 'this_week', pattern)
-                    elif date_type == 'next_week':
-                        # Return the next week (starting from Monday of next week)
-                        # Calculate days until next Monday
+                        return ((start_of_week, end_of_week), 'this_week', phrase)
+                    elif ref_type == 'next_week':
                         days_until_next_monday = 7 - self.today.weekday() if self.today.weekday() > 0 else 7
-                        start_of_week = self.today + timedelta(days=days_until_next_monday)
-                        end_of_week = start_of_week + timedelta(days=6)
-                        return ((start_of_week, end_of_week), 'next_week', pattern)
-                    elif date_type == 'this_month':
-                        # Return the whole month
+                        start_of_next_week = self.today + timedelta(days=days_until_next_monday)
+                        end_of_next_week = start_of_next_week + timedelta(days=6)
+                        return ((start_of_next_week, end_of_next_week), 'next_week', phrase)
+                    elif ref_type == 'this_month':
                         start_of_month = self.today.replace(day=1)
                         last_day = calendar.monthrange(self.today.year, self.today.month)[1]
                         end_of_month = self.today.replace(day=last_day)
-                        return ((start_of_month, end_of_month), 'this_month', pattern)
-                    elif date_type in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
-                        # Map date_type to weekday number (0=Monday, 6=Sunday)
-                        weekday_map = {'monday': 0, 'tuesday': 1, 'wednesday': 2, 
-                                      'thursday': 3, 'friday': 4, 'saturday': 5, 'sunday': 6}
-                        target_weekday = weekday_map[date_type]
-                        current_weekday = self.today.weekday()
-                        
-                        # Check if "next" appears before weekday
-                        next_week_patterns = ['tuần sau', 'tuần tới', 'tuan sau', 'tuan toi', 'next']
-                        is_next_week = any(next_pattern in question_normalized for next_pattern in next_week_patterns)
-                        
-                        if is_next_week:
-                            # Get next week's specified weekday
-                            days_ahead = target_weekday - current_weekday
-                            if days_ahead <= 0:  # Target is today or earlier this week
-                                days_ahead += 7  # Move to next week
-                            days_ahead += 7  # Add another week for "next"
-                        else:
-                            # Get this week's specified weekday (or next week if we've passed it)
-                            days_ahead = target_weekday - current_weekday
-                            if days_ahead < 0:  # Target is earlier this week (we missed it)
-                                days_ahead += 7  # Move to next week
-                        
-                        target_date = self.today + timedelta(days=days_ahead)
-                        return (target_date, date_type, pattern)
+                        return ((start_of_month, end_of_month), 'this_month', phrase)
         
-        # Check for specific dates in DD/MM or DD/MM/YYYY format
-        date_patterns = [
-            r'(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}))?',  # DD/MM or DD/MM/YYYY
-            r'ngày (\d{1,2})[/-](\d{1,2})',  # ngày DD/MM
-            r'ngay (\d{1,2})[/-](\d{1,2})'   # ngay DD/MM
-        ]
+        # PRIORITY 6: Check for weekday references
+        weekday_references = {
+            'monday': ['thứ hai', 'thu hai', 'thứ 2', 'thu 2', 'monday', 't2'],
+            'tuesday': ['thứ ba', 'thu ba', 'thứ 3', 'thu 3', 'tuesday', 't3'],
+            'wednesday': ['thứ tư', 'thu tu', 'thứ 4', 'thu 4', 'wednesday', 't4'],
+            'thursday': ['thứ năm', 'thu nam', 'thứ 5', 'thu 5', 'thursday', 't5'],
+            'friday': ['thứ sáu', 'thu sau', 'thứ 6', 'thu 6', 'friday', 't6'],
+            'saturday': ['thứ bảy', 'thu bay', 'thứ 7', 'thu 7', 'saturday', 't7'],
+            'sunday': ['chủ nhật', 'chu nhat', 'sunday', 'cn']
+        }
         
-        # First check if there's a direct date pattern in the question
-        for pattern in date_patterns:
-            matches = re.search(pattern, question_normalized)
-            if matches:
-                logger.log_with_timestamp("SCHEDULE API", f"Found date pattern: {matches.group(0)}")
-                day = int(matches.group(1))
-                month = int(matches.group(2))
-                year = int(matches.group(3)) if len(matches.groups()) > 2 and matches.group(3) else self.today.year
-                
-                try:
-                    specific_date = datetime(year, month, day).date()
-                    logger.log_with_timestamp("SCHEDULE API", f"Parsed specific date: {specific_date.strftime('%d/%m/%Y')}")
-                    return (specific_date, 'specific_date', matches.group(0))
-                except ValueError:
-                    # Invalid date, like February 30
-                    logger.log_with_timestamp("SCHEDULE API", f"Invalid date: {day}/{month}/{year}")
-                    continue
+        weekday_map = {
+            'monday': 0, 
+            'tuesday': 1, 
+            'wednesday': 2, 
+            'thursday': 3, 
+            'friday': 4, 
+            'saturday': 5, 
+            'sunday': 6
+        }
         
-        # No date reference found, default to today
+        for day_name, phrases in weekday_references.items():
+            for phrase in phrases:
+                if phrase in question_normalized or phrase in question_lower:
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✓ Found weekday reference: {phrase} ({day_name})")
+                    
+                    target_weekday = weekday_map[day_name]
+                    current_weekday = self.today.weekday()
+                    days_ahead = target_weekday - current_weekday
+                    
+                    # If the day has already passed this week, look to next week
+                    if days_ahead <= 0:
+                        days_ahead += 7
+                    
+                    # Check if "next week" is mentioned explicitly
+                    for next_week_phrase in ['tuần sau', 'tuần tới', 'tuan sau', 'tuan toi', 'next']:
+                        if next_week_phrase in question_normalized:
+                            days_ahead += 7
+                            break
+                            
+                    target_date = self.today + timedelta(days=days_ahead)
+                    logger.log_with_timestamp("DATE EXTRACTION", f"✓ Calculated weekday date: {target_date.strftime('%d/%m/%Y')}")
+                    
+                    return (target_date, day_name, phrase)
+                    
+        # If no date reference was found, default to today
+        logger.log_with_timestamp("DATE EXTRACTION", "✗ No date reference found, defaulting to today")
         return (self.today, 'today', 'default')
     
     def normalize_vietnamese(self, text):
@@ -239,6 +291,22 @@ class ScheduleService:
         Convert text with diacritics to non-diacritic form to make matching more robust
         """
         return unidecode(text).lower()
+
+    def get_vietnamese_weekday(self, weekday_index):
+        """
+        Convert weekday index to Vietnamese weekday name
+        0 = Monday, 6 = Sunday
+        """
+        weekday_names = {
+            0: 'Thứ Hai',
+            1: 'Thứ Ba',
+            2: 'Thứ Tư',
+            3: 'Thứ Năm',
+            4: 'Thứ Sáu',
+            5: 'Thứ Bảy',
+            6: 'Chủ Nhật'
+        }
+        return weekday_names.get(weekday_index, '')
 
     async def get_schedule_by_semester(self, hoc_ky):
         """Get schedule data for a specific semester
