@@ -352,7 +352,7 @@ class QueryClassifier:
                 'tôn giáo', 'thần linh', 'chúa', 'phật',
                 'sức khỏe', 'bệnh tật', 'thuốc', 'khám bệnh',
                 'tiền bạc', 'đầu tư', 'chứng khoán', 'tiền mã hóa',
-                'cờ bạc', 'cá cược', 'xổ số'
+                'cờ bạc', 'cá cược', 'xổ số', 'đám cưới', 'đám hỏi', 'đám tang'
             ],
             'vn_no_accent': [
                 'tinh yeu', 'hen ho', 'yeu duong', 'tinh cam', 'nguoi yeu',
