@@ -255,6 +255,7 @@ StudyAssistant sử dụng kiến trúc hiện đại, có khả năng mở rộ
 ### 4.2 Tích Hợp Dữ Liệu Trường Đại Học
 
 - Thông tin lịch học thời gian thực
+- Truy xuất và hiển thị lịch thi
 - Truy xuất và phân tích điểm số
 - Truy cập thông tin khóa học và đề cương
 - Trình bày dữ liệu học thuật cá nhân hóa
@@ -448,12 +449,29 @@ app/
 
 #### 7.2.3 Truy Xuất Dữ Liệu Đại Học
 
-1. Người dùng hỏi về lịch học, điểm số hoặc dữ liệu học thuật khác
+1. Người dùng hỏi về lịch học, lịch thi, điểm số hoặc dữ liệu học thuật khác
 2. Hệ thống phân loại truy vấn là liên quan đến dữ liệu đại học
 3. `ptit_auth_service` xác thực với hệ thống của trường đại học
-4. Dịch vụ thích hợp truy xuất dữ liệu được yêu cầu
+4. Dịch vụ thích hợp truy xuất dữ liệu được yêu cầu:
+   - `schedule_service` xử lý truy vấn về lịch học
+   - `exam_schedule_service` xử lý truy vấn về lịch thi
 5. Dữ liệu được định dạng và gửi đến AI để trình bày bằng ngôn ngữ tự nhiên
 6. AI tạo phản hồi thân thiện với con người kèm theo thông tin được yêu cầu
+
+#### 7.2.4 Xử Lý Lịch Thi
+
+1. Người dùng hỏi về lịch thi của một ngày hoặc tuần cụ thể (ví dụ: "lịch thi tuần sau" hoặc "ngày 20/6 thi môn gì")
+2. Hệ thống phân loại truy vấn là liên quan đến lịch thi
+3. `exam_schedule_service` sử dụng phương pháp trích xuất thông tin ngày tháng từ `schedule_service`
+4. Hệ thống xác định ngày cụ thể hoặc khoảng thời gian (như cả tuần)
+5. Dịch vụ truy xuất thông tin lịch thi từ API của trường đại học theo thời gian được yêu cầu
+6. Nếu là truy vấn theo tuần, hệ thống sẽ tìm tất cả các kỳ thi trong khoảng thời gian đó
+7. Dữ liệu được định dạng và hiển thị với các thông tin chi tiết như:
+   - Tên môn thi và mã môn
+   - Ngày thi và giờ thi
+   - Phòng thi và địa điểm
+   - Hình thức thi và thời gian thi
+8. AI tạo phản hồi tự nhiên với thông tin lịch thi và lời nhắc về việc chuẩn bị cho kỳ thi
 
 ---
 
@@ -482,6 +500,8 @@ Hệ thống thông minh phân loại truy vấn của người dùng để xác
 
 - **Kiến Thức Chung**: Được xử lý trực tiếp bởi AI
 - **Dữ Liệu Đại Học**: Được chuyển đến API đại học thích hợp
+  - **Lịch Học**: Truy vấn về thời khóa biểu lớp học
+  - **Lịch Thi**: Truy vấn về lịch thi, kỳ thi, phòng thi
 - **Câu Hỏi Tài Liệu**: Được xử lý với ngữ cảnh tài liệu
 - **Truy Vấn Tìm Kiếm Web**: Được gửi qua pipeline tìm kiếm và trích xuất
 - **Yêu Cầu UML/Sơ Đồ**: Được xử lý với câu nhắc chuyên biệt
@@ -578,18 +598,19 @@ Khi công nghệ AI tiến bộ và nhu cầu giáo dục phát triển, StudyAs
 
 ### Phụ Lục A: Các Điểm Cuối API
 
-| Điểm cuối            | Phương thức | Mô tả                             |
-| -------------------- | ----------- | --------------------------------- |
-| /auth/login          | POST        | Xác thực người dùng               |
-| /auth/signup         | POST        | Đăng ký người dùng                |
-| /chat                | POST        | Gửi tin nhắn đến AI               |
-| /chat/sessions       | GET         | Liệt kê phiên chat của người dùng |
-| /chat/sessions/:id   | GET         | Lấy phiên chat cụ thể             |
-| /files/upload        | POST        | Tải lên tài liệu                  |
-| /files/list          | GET         | Liệt kê tài liệu của người dùng   |
-| /files/:id           | GET         | Lấy chi tiết tài liệu             |
-| /university/schedule | GET         | Lấy lịch học của người dùng       |
-| /university/grades   | GET         | Lấy điểm số của người dùng        |
+| Điểm cuối                 | Phương thức | Mô tả                             |
+| ------------------------- | ----------- | --------------------------------- |
+| /auth/login               | POST        | Xác thực người dùng               |
+| /auth/signup              | POST        | Đăng ký người dùng                |
+| /chat                     | POST        | Gửi tin nhắn đến AI               |
+| /chat/sessions            | GET         | Liệt kê phiên chat của người dùng |
+| /chat/sessions/:id        | GET         | Lấy phiên chat cụ thể             |
+| /files/upload             | POST        | Tải lên tài liệu                  |
+| /files/list               | GET         | Liệt kê tài liệu của người dùng   |
+| /files/:id                | GET         | Lấy chi tiết tài liệu             |
+| /university/schedule      | GET         | Lấy lịch học của người dùng       |
+| /university/exam-schedule | GET         | Lấy lịch thi của người dùng       |
+| /university/grades        | GET         | Lấy điểm số của người dùng        |
 
 ### Phụ Lục B: Lược Đồ Cơ Sở Dữ Liệu SQL
 
